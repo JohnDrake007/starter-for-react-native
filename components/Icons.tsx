@@ -120,6 +120,8 @@ export const Tag = createStrokeIcon(["M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2
 
 export const ChevronLeft = createStrokeIcon(["M15 18l-6-6 6-6"]);
 
+export const ChevronDown = createStrokeIcon(["M6 9l6 6 6-6"]);
+
 export const X = createStrokeIcon(["M18 6L6 18M6 6l12 12"]);
 
 export const Eye = createStrokeIcon(["M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z", "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"]);
@@ -143,3 +145,7 @@ export const Pill = createStrokeIcon(["M10.5 1.5l-8.5 8.5a4.95 4.95 0 0 0 7 7l8.
 export const Filter = createStrokeIcon(["M22 3H2l8 9.46V19l4 2v-8.54L22 3z"]);
 
 export const ClipboardCheck = createStrokeIcon(["M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2", "M9 2h6a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z", "M9 14l2 2 4-4"]);
+
+export const Beaker = createStrokeIcon(["M4 2h16l-2 12H6L4 2zM6 14l-2 6h16l-2-6", "M9 6h6M9 10h4"]);
+
+export const Hash = createStrokeIcon(["M4 9h16M4 15h16M10 3L8 21M16 3l-2 18"]);

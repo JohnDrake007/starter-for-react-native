@@ -1,7 +1,7 @@
 import { View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, RefreshControl } from "react-native";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useRouter, useFocusEffect } from "expo-router";
 import { Search, Phone, MapPin, Sprout, UserPlus } from "@/components/Icons";
 import { databases, Query, DATABASE_ID, CUSTOMERS_COLLECTION_ID } from "@/lib/appwrite";
 
@@ -44,7 +44,11 @@ export default function CustomersScreen() {
     }
   }, []);
 
-  useEffect(() => { fetchCustomers(); }, [fetchCustomers]);
+  useFocusEffect(
+    useCallback(() => {
+      fetchCustomers();
+    }, [fetchCustomers])
+  );
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);

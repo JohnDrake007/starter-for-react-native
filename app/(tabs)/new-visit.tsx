@@ -1,7 +1,7 @@
 import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Alert, Image, Platform } from "react-native";
 import { useState, useEffect, useCallback } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useRouter, useLocalSearchParams } from "expo-router";
+import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
@@ -80,14 +80,16 @@ export default function NewVisitScreen() {
   const [showNextVisitDatePicker, setShowNextVisitDatePicker] = useState(false);
   const [nextVisitTask, setNextVisitTask] = useState("");
 
-  useEffect(() => {
-    databases.listDocuments(DATABASE_ID, CUSTOMERS_COLLECTION_ID, [Query.limit(500)])
-      .then((res) => setCustomers(res.documents as unknown as Customer[]))
-      .catch(() => setCustomers([]));
-    databases.listDocuments(DATABASE_ID, ITEMS_COLLECTION_ID, [Query.limit(500)])
-      .then((res) => setItems(res.documents as unknown as Item[]))
-      .catch(() => setItems([]));
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      databases.listDocuments(DATABASE_ID, CUSTOMERS_COLLECTION_ID, [Query.limit(500)])
+        .then((res) => setCustomers(res.documents as unknown as Customer[]))
+        .catch(() => setCustomers([]));
+      databases.listDocuments(DATABASE_ID, ITEMS_COLLECTION_ID, [Query.limit(500)])
+        .then((res) => setItems(res.documents as unknown as Item[]))
+        .catch(() => setItems([]));
+    }, [])
+  );
 
   const filteredCustomers = customerSearch
     ? customers.filter((c) =>

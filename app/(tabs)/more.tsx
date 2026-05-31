@@ -3,9 +3,11 @@ import { Package, Database, Leaf, Info } from "@/components/Icons";
 import { ping } from "@/lib/appwrite";
 import { useState } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useRouter } from "expo-router";
 
 export default function MoreScreen() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const [pingStatus, setPingStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
 
   const handlePing = async () => {
@@ -22,7 +24,7 @@ export default function MoreScreen() {
     <ScrollView style={styles.container} contentContainerStyle={{ paddingTop: insets.top + 16, paddingBottom: insets.bottom + 24, padding: 16, gap: 12 }}>
       <Text style={styles.title}>More</Text>
 
-      <TouchableOpacity style={styles.menuCard} onPress={() => {}}>
+      <TouchableOpacity style={styles.menuCard} onPress={() => router.push("/products")}>
         <View style={[styles.menuIcon, { backgroundColor: "#dcfce7" }]}>
           <Package color="#16a34a" size={20} />
         </View>

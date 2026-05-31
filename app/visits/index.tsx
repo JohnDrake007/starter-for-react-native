@@ -1,9 +1,9 @@
 import { View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, RefreshControl } from "react-native";
-import { useState, useEffect, useCallback } from "react";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useState, useCallback } from "react";
+import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Search, Calendar, Package, Sprout, MapPin, ArrowLeft, Filter } from "@/components/Icons";
-import { databases, Query, DATABASE_ID, CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, ITEMS_COLLECTION_ID } from "@/lib/appwrite";
+import { Search, Calendar, Package, Sprout, MapPin, ArrowLeft, Filter, X, ChevronLeft, ChevronRight } from "@/components/Icons";
+import { databases, Query, DATABASE_ID, CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID } from "@/lib/appwrite";
 
 interface VisitItem {
   $id: string;
@@ -33,6 +33,9 @@ export default function AllVisitsScreen() {
   const [search, setSearch] = useState(params.customerName || "");
   const [selectedCustomerId, setSelectedCustomerId] = useState(params.customerId || "");
   const [showFilters, setShowFilters] = useState(false);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [calMonth, setCalMonth] = useState(new Date());
 
   const loadData = useCallback(async () => {
     try {
@@ -81,7 +84,11 @@ export default function AllVisitsScreen() {
     setLoading(false);
   }, [selectedCustomerId]);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useFocusEffect(
+    useCallback(() => {
+      loadData();
+    }, [loadData])
+  );
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -90,16 +97,44 @@ export default function AllVisitsScreen() {
   }, [loadData]);
 
   const filteredVisits = visits.filter((v) => {
-    if (selectedCustomerId) return v.customerId === selectedCustomerId;
-    if (!search) return true;
-    const q = search.toLowerCase();
-    return v.customerName.toLowerCase().includes(q) || (v.observations || "").toLowerCase().includes(q);
+    if (selectedCustomerId && v.customerId !== selectedCustomerId) return false;
+    if (search && !selectedCustomerId) {
+      const q = search.toLowerCase();
+      if (!v.customerName.toLowerCase().includes(q) && !(v.observations || "").toLowerCase().includes(q)) return false;
+    }
+    if (dateFrom) {
+      const visitDate = new Date(v.visitDate).toISOString().split("T")[0];
+      if (visitDate < dateFrom) return false;
+    }
+    if (dateTo) {
+      const visitDate = new Date(v.visitDate).toISOString().split("T")[0];
+      if (visitDate > dateTo) return false;
+    }
+    return true;
   });
 
   const formatDate = (dateStr: string) => {
     try {
       return new Date(dateStr).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
     } catch { return dateStr; }
+  };
+
+  const clearDateFilter = () => {
+    setDateFrom("");
+    setDateTo("");
+  };
+
+  const setQuickDate = (days: number) => {
+    const d = new Date();
+    d.setDate(d.getDate() - days + 1);
+    setDateFrom(d.toISOString().split("T")[0]);
+    setDateTo(new Date().toISOString().split("T")[0]);
+  };
+
+  const setDateToday = () => {
+    const today = new Date().toISOString().split("T")[0];
+    setDateFrom(today);
+    setDateTo(today);
   };
 
   const getInitials = (name: string) => {
@@ -115,6 +150,8 @@ export default function AllVisitsScreen() {
   };
 
   const customerList = Object.entries(customers).sort((a, b) => a[1].name.localeCompare(b[1].name));
+
+  const hasDateFilter = !!(dateFrom || dateTo);
 
   return (
     <View style={styles.outerContainer}>
@@ -135,8 +172,9 @@ export default function AllVisitsScreen() {
         <View style={styles.filterPanel}>
           <View style={styles.searchBox}>
             <Search color="#9ca3af" size={16} />
-            <TextInput style={styles.searchInput} placeholder="Search by farmer name..." placeholderTextColor="#9ca3af" value={search} onChangeText={(t) => { setSearch(t); setSelectedCustomerId(""); }} />
+            <TextInput style={styles.searchInput} placeholder="Search by farmer name..." placeholderTextColor="#9ca3af" value={search} onChangeText={(t) => { setSearch(t); if (selectedCustomerId) { setSelectedCustomerId(""); } }} />
           </View>
+
           {selectedCustomerId ? (
             <View style={styles.activeFilter}>
               <Sprout color="#16a34a" size={12} />
@@ -146,7 +184,124 @@ export default function AllVisitsScreen() {
               </TouchableOpacity>
             </View>
           ) : null}
-          <Text style={styles.filterLabel}>Filter by Farmer</Text>
+
+          <View style={styles.sectionDivider} />
+
+          <Text style={styles.filterSectionTitle}>Date</Text>
+
+          {hasDateFilter && (
+            <View style={styles.activeFilter}>
+              <Calendar color="#16a34a" size={12} />
+              <Text style={styles.activeFilterText}>
+                {dateFrom && dateTo ? `${dateFrom} — ${dateTo}` : dateFrom ? `From ${dateFrom}` : `Until ${dateTo}`}
+              </Text>
+              <TouchableOpacity style={styles.activeFilterClear} onPress={clearDateFilter}>
+                <Text style={styles.activeFilterClearText}>Clear</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          <View style={styles.calCard}>
+            <View style={styles.calNav}>
+              <TouchableOpacity style={styles.calNavBtn} onPress={() => { const d = new Date(calMonth); d.setMonth(d.getMonth() - 1); setCalMonth(d); }}>
+                <ChevronLeft color="#1a1a2e" size={18} />
+              </TouchableOpacity>
+              <Text style={styles.calMonthText}>{calMonth.toLocaleDateString("en-IN", { month: "long", year: "numeric" })}</Text>
+              <TouchableOpacity style={styles.calNavBtn} onPress={() => { const d = new Date(calMonth); d.setMonth(d.getMonth() + 1); setCalMonth(d); }}>
+                <ChevronRight color="#1a1a2e" size={18} />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.calDayLabels}>
+              {["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"].map((d) => (
+                <Text key={d} style={styles.calDayLabel}>{d}</Text>
+              ))}
+            </View>
+            <View style={styles.calGrid}>
+              {(() => {
+                const year = calMonth.getFullYear();
+                const month = calMonth.getMonth();
+                const firstDay = new Date(year, month, 1).getDay();
+                const daysInMonth = new Date(year, month + 1, 0).getDate();
+                const prevDays = new Date(year, month, 0).getDate();
+                const todayStr = new Date().toISOString().split("T")[0];
+                const cells: React.ReactNode[] = [];
+                const fromMs = dateFrom ? new Date(dateFrom).getTime() : Infinity;
+                const toMs = dateTo ? new Date(dateTo).getTime() : -Infinity;
+                const rangeStart = Math.min(fromMs, toMs);
+                const rangeEnd = Math.max(fromMs, toMs);
+                for (let i = firstDay - 1; i >= 0; i--) {
+                  cells.push(<View key={`p${i}`} style={styles.calCell}><Text style={styles.calDayMuted}>{prevDays - i}</Text></View>);
+                }
+                for (let d = 1; d <= daysInMonth; d++) {
+                  const dt = new Date(year, month, d);
+                  const ds = dt.toISOString().split("T")[0];
+                  const ms = dt.getTime();
+                  const isToday = ds === todayStr;
+                  const isStart = ds === dateFrom;
+                  const isEnd = ds === dateTo;
+                  const isInRange = hasDateFilter && ms >= rangeStart && ms <= rangeEnd;
+                  const isSelected = isStart || isEnd;
+                  cells.push(
+                    <TouchableOpacity
+                      key={d}
+                      style={[
+                        styles.calCell,
+                        isToday && !isSelected && styles.calCellToday,
+                        isSelected && styles.calCellSelected,
+                        isInRange && !isSelected && styles.calCellInRange,
+                      ]}
+                      onPress={() => {
+                        if (!dateFrom || (dateFrom && dateTo)) {
+                          setDateFrom(ds);
+                          setDateTo("");
+                        } else {
+                          if (ds < dateFrom) {
+                            setDateFrom(ds);
+                            setDateTo(dateFrom);
+                          } else {
+                            setDateTo(ds);
+                          }
+                        }
+                      }}
+                    >
+                      <Text style={[
+                        styles.calDayText,
+                        !isToday && !isSelected && !isInRange && styles.calDayDefault,
+                        isToday && !isSelected && styles.calDayToday,
+                        isSelected && styles.calDaySelected,
+                        isInRange && !isSelected && styles.calDayInRange,
+                      ]}>{d}</Text>
+                    </TouchableOpacity>
+                  );
+                }
+                const totalCells = firstDay + daysInMonth;
+                const remaining = totalCells <= 35 ? 35 - totalCells : 42 - totalCells;
+                for (let d = 1; d <= remaining; d++) {
+                  cells.push(<View key={`n${d}`} style={styles.calCell}><Text style={styles.calDayMuted}>{d}</Text></View>);
+                }
+                return cells;
+              })()}
+            </View>
+          </View>
+
+          <View style={styles.quickDateRow}>
+            <TouchableOpacity style={styles.quickDateBtn} onPress={setDateToday}>
+              <Text style={styles.quickDateBtnText}>Today</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.quickDateBtn} onPress={() => setQuickDate(7)}>
+              <Text style={styles.quickDateBtnText}>Last 7d</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.quickDateBtn} onPress={() => setQuickDate(30)}>
+              <Text style={styles.quickDateBtnText}>Last 30d</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.quickDateBtn} onPress={clearDateFilter}>
+              <Text style={styles.quickDateBtnText}>All</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.sectionDivider} />
+
+          <Text style={styles.filterSectionTitle}>Filter by Farmer</Text>
           <FlatList
             data={customerList}
             keyExtractor={([id]) => id}
@@ -258,6 +413,28 @@ const styles = StyleSheet.create({
   activeFilterText: { fontSize: 13, fontWeight: "500", color: "#059669", flex: 1 },
   activeFilterClear: { paddingHorizontal: 8 },
   activeFilterClearText: { fontSize: 12, color: "#dc2626", fontWeight: "600" },
+  sectionDivider: { height: 1, backgroundColor: "#f3f4f6", marginVertical: 4 },
+  filterSectionTitle: { fontSize: 12, fontWeight: "600", color: "#374151", marginTop: 4 },
+  calCard: { backgroundColor: "#f9fafb", borderRadius: 12, borderWidth: 1, borderColor: "#e5e7eb", padding: 10 },
+  calNav: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 },
+  calNavBtn: { width: 32, height: 32, borderRadius: 8, backgroundColor: "#fff", justifyContent: "center", alignItems: "center", borderWidth: 1, borderColor: "#e5e7eb" },
+  calMonthText: { fontSize: 13, fontWeight: "600", color: "#1a1a2e" },
+  calDayLabels: { flexDirection: "row", justifyContent: "space-around", marginBottom: 4 },
+  calDayLabel: { fontSize: 10, fontWeight: "500", color: "#9ca3af", width: 36, textAlign: "center" },
+  calGrid: { flexDirection: "row", flexWrap: "wrap" },
+  calCell: { width: "14.28%", height: 36, justifyContent: "center", alignItems: "center", borderRadius: 18 },
+  calCellToday: { backgroundColor: "#f0fdf4" },
+  calCellSelected: { backgroundColor: "#16a34a" },
+  calCellInRange: { backgroundColor: "#bbf7d0" },
+  calDayText: { fontSize: 13, fontWeight: "500" },
+  calDayDefault: { color: "#1a1a2e" },
+  calDayMuted: { fontSize: 13, color: "#d1d5db" },
+  calDayToday: { color: "#16a34a", fontWeight: "700" },
+  calDaySelected: { color: "#fff", fontWeight: "700" },
+  calDayInRange: { color: "#166534", fontWeight: "500" },
+  quickDateRow: { flexDirection: "row", gap: 8 },
+  quickDateBtn: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 8, backgroundColor: "#f3f4f6", borderWidth: 1, borderColor: "#e5e7eb" },
+  quickDateBtnText: { fontSize: 12, fontWeight: "500", color: "#6b7280" },
   filterLabel: { fontSize: 12, fontWeight: "500", color: "#6b7280" },
   filterList: { maxHeight: 200 },
   filterChip: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 12, backgroundColor: "#f9fafb", borderWidth: 1, borderColor: "#e5e7eb", marginBottom: 4 },

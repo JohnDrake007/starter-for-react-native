@@ -1,7 +1,7 @@
 import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity } from "react-native";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useRouter, useFocusEffect } from "expo-router";
 import { Bell, Users, ClipboardList, Sprout, PlusCircle, UserPlus, MapPin, ArrowRight, ClipboardCheck } from "@/components/Icons";
 import { databases, Query, DATABASE_ID, CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID } from "@/lib/appwrite";
 
@@ -104,7 +104,11 @@ export default function HomeScreen() {
     }
   }, []);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useFocusEffect(
+    useCallback(() => {
+      loadData();
+    }, [loadData])
+  );
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -268,7 +272,7 @@ export default function HomeScreen() {
               );
             })
           )}
-          <TouchableOpacity style={styles.viewAllButton} onPress={() => router.push("/visits/index" as any)}>
+          <TouchableOpacity style={styles.viewAllButton} onPress={() => router.push("/visits" as any)}>
             <ClipboardCheck color="#16a34a" size={16} />
             <Text style={styles.viewAllText}>View All Visits</Text>
             <ArrowRight color="#16a34a" size={16} />

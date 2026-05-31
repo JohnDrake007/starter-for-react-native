@@ -1,6 +1,6 @@
 import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity, Alert, Linking, Platform, TextInput } from "react-native";
-import { useState, useEffect, useCallback } from "react";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useState, useCallback } from "react";
+import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArrowLeft, Phone, MapPin, Sprout, Calendar, Package, Share2, Pencil, Check, X, PlusCircle, ExternalLink, Eye, Camera, ArrowRight } from "@/components/Icons";
 import { databases, Query, DATABASE_ID, CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, ITEMS_COLLECTION_ID } from "@/lib/appwrite";
@@ -118,7 +118,11 @@ export default function CustomerDetailScreen() {
     }
   }, [id]);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useFocusEffect(
+    useCallback(() => {
+      loadData();
+    }, [loadData])
+  );
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -429,7 +433,7 @@ export default function CustomerDetailScreen() {
         )}
 
         {visits.length > 5 && (
-          <TouchableOpacity style={styles.viewAllButton} onPress={() => router.push({ pathname: "/visits/index" as any, params: { customerId: customer.$id, customerName: customer.name } })}>
+          <TouchableOpacity style={styles.viewAllButton} onPress={() => router.push({ pathname: "/visits" as any, params: { customerId: customer.$id, customerName: customer.name } })}>
             <Calendar color="#16a34a" size={16} />
             <Text style={styles.viewAllText}>View All Visits ({visits.length})</Text>
             <ArrowRight color="#16a34a" size={16} />
