@@ -104,13 +104,13 @@ export const Logs = ({ toggleBottomSheet, isOpen, logs }: LogsProps) => {
                 <View style={styles.logMetaCell}>
                   <Text style={styles.label}>Endpoint</Text>
                   <Text style={styles.value}>
-                    {process.env.EXPO_PUBLIC_APPWRITE_ENDPOINT}
+                    https://sgp.cloud.appwrite.io/v1
                   </Text>
                 </View>
                 <View style={styles.logMetaCell}>
                   <Text style={styles.label}>Project ID</Text>
                   <Text style={styles.value}>
-                    {process.env.EXPO_PUBLIC_APPWRITE_PROJECT_ID}
+                    6a1bf181002ff774402d
                   </Text>
                 </View>
               </View>
@@ -118,7 +118,7 @@ export const Logs = ({ toggleBottomSheet, isOpen, logs }: LogsProps) => {
                 <View style={styles.logMetaCell}>
                   <Text style={styles.label}>Project name</Text>
                   <Text style={styles.value}>
-                    {process.env.EXPO_PUBLIC_APPWRITE_PROJECT_NAME}
+                    Field Agent
                   </Text>
                 </View>
               </View>
