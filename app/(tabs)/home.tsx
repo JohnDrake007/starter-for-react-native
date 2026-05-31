@@ -1,9 +1,9 @@
-import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity, Alert, TextInput } from "react-native";
+import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity } from "react-native";
 import { useState, useEffect, useCallback } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { Bell, Users, ClipboardList, Sprout, PlusCircle, UserPlus, MapPin, ArrowRight } from "@/components/Icons";
-import { databases, Query, ID, DATABASE_ID, CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID } from "@/lib/appwrite";
+import { Bell, Users, ClipboardList, Sprout, PlusCircle, UserPlus, MapPin, ArrowRight, ClipboardCheck } from "@/components/Icons";
+import { databases, Query, DATABASE_ID, CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID } from "@/lib/appwrite";
 
 interface VisitWithCustomer {
   $id: string;
@@ -35,11 +35,6 @@ export default function HomeScreen() {
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showAddCustomer, setShowAddCustomer] = useState(false);
-  const [newName, setNewName] = useState("");
-  const [newPhone, setNewPhone] = useState("");
-  const [newCrop, setNewCrop] = useState("");
-  const [saving, setSaving] = useState(false);
 
   const loadData = useCallback(async () => {
     try {
@@ -117,23 +112,6 @@ export default function HomeScreen() {
     setRefreshing(false);
   }, [loadData]);
 
-  const handleAddCustomer = async () => {
-    if (!newName.trim() || !newPhone.trim()) { Alert.alert("Error", "Name and phone are required"); return; }
-    setSaving(true);
-    try {
-      await databases.createDocument(DATABASE_ID, CUSTOMERS_COLLECTION_ID, ID.unique(), {
-        name: newName.trim(),
-        phone: newPhone.trim(),
-        cropType: newCrop.trim() || undefined,
-      });
-      Alert.alert("Success", `${newName.trim()} added!`);
-      setNewName(""); setNewPhone(""); setNewCrop(""); setShowAddCustomer(false);
-      loadData();
-    } catch (e: any) {
-      Alert.alert("Error", e.message || "Failed to add customer");
-    } finally { setSaving(false); }
-  };
-
   const formatReminderDate = (dateStr: string) => {
     const date = new Date(dateStr);
     const diffDays = Math.ceil((date.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
@@ -201,7 +179,7 @@ export default function HomeScreen() {
             <PlusCircle color="#fff" size={16} />
             <Text style={styles.primaryButtonText}>New Visit</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.outlineButton} onPress={() => setShowAddCustomer(true)}>
+          <TouchableOpacity style={styles.outlineButton} onPress={() => router.push("/customer/add")}>
             <UserPlus color="#16a34a" size={16} />
             <Text style={styles.outlineButtonText}>Add Customer</Text>
           </TouchableOpacity>
@@ -290,24 +268,12 @@ export default function HomeScreen() {
               );
             })
           )}
+          <TouchableOpacity style={styles.viewAllButton} onPress={() => router.push("/visits/index" as any)}>
+            <ClipboardCheck color="#16a34a" size={16} />
+            <Text style={styles.viewAllText}>View All Visits</Text>
+            <ArrowRight color="#16a34a" size={16} />
+          </TouchableOpacity>
         </View>
-
-        {showAddCustomer && (
-          <View style={styles.addForm}>
-            <Text style={styles.addFormTitle}>New Farmer</Text>
-            <TextInput style={styles.formInput} placeholder="Farmer's name *" placeholderTextColor="#9ca3af" value={newName} onChangeText={setNewName} />
-            <TextInput style={styles.formInput} placeholder="Phone number *" placeholderTextColor="#9ca3af" value={newPhone} onChangeText={setNewPhone} keyboardType="phone-pad" />
-            <TextInput style={styles.formInput} placeholder="Crop type (optional)" placeholderTextColor="#9ca3af" value={newCrop} onChangeText={setNewCrop} />
-            <View style={styles.formButtons}>
-              <TouchableOpacity style={styles.formCancel} onPress={() => setShowAddCustomer(false)}>
-                <Text style={styles.formCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.formSubmit, saving && styles.formSubmitDisabled]} onPress={handleAddCustomer} disabled={saving}>
-                <Text style={styles.formSubmitText}>{saving ? "Saving..." : "Add Farmer"}</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        )}
       </ScrollView>
     </View>
   );
@@ -327,10 +293,12 @@ const styles = StyleSheet.create({
   statNumber: { fontSize: 24, fontWeight: "700" },
   statLabel: { fontSize: 11, fontWeight: "600" },
   quickActionsRow: { flexDirection: "row", gap: 10, marginBottom: 24 },
-  primaryButton: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: "#16a34a", borderRadius: 14, padding: 14, shadowColor: "#16a34a", shadowOpacity: 0.2, shadowRadius: 8, elevation: 3 },
+  primaryButton: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: "#16a34a", borderRadius: 14, padding: 14, elevation: 3 },
   primaryButtonText: { color: "#fff", fontSize: 15, fontWeight: "600" },
   outlineButton: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, borderWidth: 1.5, borderColor: "#16a34a40", borderRadius: 14, padding: 14 },
   outlineButtonText: { color: "#16a34a", fontSize: 15, fontWeight: "600" },
+  viewAllButton: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 12, borderRadius: 14, borderWidth: 1.5, borderColor: "#16a34a30", marginTop: 8 },
+  viewAllText: { fontSize: 14, fontWeight: "600", color: "#16a34a" },
   section: { marginBottom: 20 },
   sectionTitle: { fontSize: 16, fontWeight: "600", color: "#1a1a2e", marginBottom: 10 },
   errorCard: { backgroundColor: "#fef2f2", borderRadius: 12, padding: 14, marginBottom: 16, borderWidth: 1, borderColor: "#fecaca" },
@@ -358,13 +326,4 @@ const styles = StyleSheet.create({
   recRow: { flexDirection: "row", flexWrap: "wrap", gap: 4, marginTop: 2 },
   recPill: { backgroundColor: "#dcfce780", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8 },
   recPillText: { fontSize: 10, fontWeight: "500", color: "#16a34a" },
-  addForm: { backgroundColor: "#fff", borderRadius: 14, padding: 16, borderWidth: 1, borderColor: "#e5e7eb", marginBottom: 16 },
-  addFormTitle: { fontSize: 16, fontWeight: "600", color: "#1a1a2e", marginBottom: 12 },
-  formInput: { backgroundColor: "#f3f4f6", borderRadius: 12, padding: 12, fontSize: 14, color: "#1a1a2e", borderWidth: 1, borderColor: "#e5e7eb", marginBottom: 10 },
-  formButtons: { flexDirection: "row", gap: 10, marginTop: 4 },
-  formCancel: { flex: 1, alignItems: "center", padding: 12, borderRadius: 12, borderWidth: 1, borderColor: "#e5e7eb" },
-  formCancelText: { fontSize: 14, fontWeight: "500", color: "#6b7280" },
-  formSubmit: { flex: 1, alignItems: "center", padding: 12, borderRadius: 12, backgroundColor: "#16a34a" },
-  formSubmitDisabled: { opacity: 0.6 },
-  formSubmitText: { fontSize: 14, fontWeight: "600", color: "#fff" },
 });

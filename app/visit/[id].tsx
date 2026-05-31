@@ -1,10 +1,12 @@
-import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity, Alert, Image, Modal, Pressable, Linking, Platform } from "react-native";
+import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity, Alert, Image, Modal, Pressable, Linking, Platform, TextInput } from "react-native";
 import { useState, useEffect, useCallback } from "react";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import DateTimePicker from "@react-native-community/datetimepicker";
 import * as ImagePicker from "expo-image-picker";
-import { ArrowLeft, Calendar, Sprout, Package, Bell, Phone, MapPin, FileText, Camera, ExternalLink, Share2, Clock, ChevronRight } from "@/components/Icons";
-import { databases, Query, DATABASE_ID, VISITS_COLLECTION_ID, CUSTOMERS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, VISIT_PHOTOS_COLLECTION_ID } from "@/lib/appwrite";
+import * as Location from "expo-location";
+import { ArrowLeft, Calendar, Sprout, Package, Bell, Phone, MapPin, FileText, Camera, ExternalLink, Share2, Clock, ChevronRight, Pencil, Check, X, Trash2 } from "@/components/Icons";
+import { databases, storage, Query, ID, DATABASE_ID, VISITS_COLLECTION_ID, CUSTOMERS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, VISIT_PHOTOS_COLLECTION_ID, ITEMS_COLLECTION_ID, STORAGE_BUCKET_ID } from "@/lib/appwrite";
 
 interface Customer {
   name: string;
@@ -45,6 +47,21 @@ export default function VisitDetailScreen() {
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
 
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [editObservations, setEditObservations] = useState("");
+  const [editNextVisitDate, setEditNextVisitDate] = useState("");
+  const [editNextVisitTask, setEditNextVisitTask] = useState("");
+  const [editVisitDate, setEditVisitDate] = useState("");
+  const [showEditVisitDatePicker, setShowEditVisitDatePicker] = useState(false);
+  const [showEditNextVisitDatePicker, setShowEditNextVisitDatePicker] = useState(false);
+  const [capturingGPS, setCapturingGPS] = useState(false);
+  const [editLatitude, setEditLatitude] = useState<number | null>(null);
+  const [editLongitude, setEditLongitude] = useState<number | null>(null);
+  const [editLocationName, setEditLocationName] = useState("");
+  const [newPhotos, setNewPhotos] = useState<{ uri: string; name?: string; type?: string; size?: number }[]>([]);
+  const [photoUploading, setPhotoUploading] = useState(false);
+
   const loadData = useCallback(async () => {
     if (!id) return;
     try {
@@ -79,7 +96,7 @@ export default function VisitDetailScreen() {
         if (recs.some((r) => r.itemId)) {
           const itemIds = recs.filter((r) => r.itemId).map((r) => r.itemId!);
           try {
-            const itemsRes = await databases.listDocuments(DATABASE_ID, "items", [
+            const itemsRes = await databases.listDocuments(DATABASE_ID, ITEMS_COLLECTION_ID, [
               Query.limit(100),
             ]);
             const itemMap: Record<string, { name: string; category?: string; unit?: string }> = {};
@@ -130,18 +147,62 @@ export default function VisitDetailScreen() {
     setRefreshing(false);
   }, [loadData]);
 
+  const startEditing = () => {
+    if (!visitData) return;
+    setEditObservations(visitData.observations || "");
+    setEditNextVisitDate(visitData.nextVisitDate ? visitData.nextVisitDate.split("T")[0] : "");
+    setEditNextVisitTask(visitData.nextVisitTask || "");
+    setEditVisitDate(visitData.visitDate ? visitData.visitDate.split("T")[0] : "");
+    setEditLatitude(visitData.latitude || null);
+    setEditLongitude(visitData.longitude || null);
+    setEditLocationName(visitData.locationName || "");
+    setNewPhotos([]);
+    setEditing(true);
+  };
+
+  const cancelEditing = () => {
+    setEditing(false);
+  };
+
+  const captureGPS = async () => {
+    setCapturingGPS(true);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Permission denied", "Location access is needed to capture GPS");
+        setCapturingGPS(false);
+        return;
+      }
+      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      setEditLatitude(pos.coords.latitude);
+      setEditLongitude(pos.coords.longitude);
+      setEditLocationName(`${pos.coords.latitude.toFixed(4)}, ${pos.coords.longitude.toFixed(4)}`);
+    } catch {
+      setEditLocationName("GPS unavailable");
+    } finally {
+      setCapturingGPS(false);
+    }
+  };
+
   const pickImage = async () => {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
         quality: 0.7,
-        allowsEditing: true,
+        allowsMultipleSelection: true,
+        allowsEditing: false,
       });
-      if (!result.canceled && result.assets[0]) {
-        setPhotos((prev) => [...prev, { $id: `local-${Date.now()}`, url: result.assets[0].uri, caption: undefined }]);
+      if (!result.canceled && result.assets.length > 0) {
+        const newPicks = result.assets.map((asset) => ({
+          uri: asset.uri,
+          name: asset.fileName || undefined,
+          type: asset.mimeType || undefined,
+          size: asset.fileSize || undefined,
+        }));
+        setNewPhotos((prev) => [...prev, ...newPicks]);
       }
-    } catch (e) {
-      Alert.alert("Error", "Could not open image picker");
+    } catch {
+      Alert.alert("Error", "Could not open gallery");
     }
   };
 
@@ -155,21 +216,75 @@ export default function VisitDetailScreen() {
       const result = await ImagePicker.launchCameraAsync({
         mediaTypes: ['images'],
         quality: 0.7,
-        allowsEditing: true,
+        allowsEditing: false,
       });
       if (!result.canceled && result.assets[0]) {
-        setPhotos((prev) => [...prev, { $id: `local-${Date.now()}`, url: result.assets[0].uri, caption: undefined }]);
+        const asset = result.assets[0];
+        setNewPhotos((prev) => [...prev, { uri: asset.uri, name: asset.fileName || undefined, type: asset.mimeType || undefined, size: asset.fileSize || undefined }]);
       }
-    } catch (e) {
+    } catch {
       Alert.alert("Error", "Could not open camera");
     }
   };
 
+  const removeNewPhoto = (idx: number) => setNewPhotos(newPhotos.filter((_, i) => i !== idx));
+
+  const saveEdits = async () => {
+    if (!visitData) return;
+    setSaving(true);
+    try {
+      const updateData: any = {};
+      if (editObservations !== (visitData.observations || "")) updateData.observations = editObservations || undefined;
+      if (editVisitDate && editVisitDate !== (visitData.visitDate || "").split("T")[0]) updateData.visitDate = new Date(editVisitDate).toISOString();
+      if (editNextVisitDate) {
+        updateData.nextVisitDate = new Date(editNextVisitDate).toISOString();
+      } else if (visitData.nextVisitDate) {
+        updateData.nextVisitDate = undefined;
+      }
+      if (editNextVisitTask !== (visitData.nextVisitTask || "")) updateData.nextVisitTask = editNextVisitTask || undefined;
+      if (editLatitude !== null && editLatitude !== visitData.latitude) updateData.latitude = editLatitude;
+      if (editLongitude !== null && editLongitude !== visitData.longitude) updateData.longitude = editLongitude;
+      if (editLocationName !== (visitData.locationName || "")) updateData.locationName = editLocationName || undefined;
+
+      if (Object.keys(updateData).length > 0) {
+        await databases.updateDocument(DATABASE_ID, VISITS_COLLECTION_ID, id, updateData);
+      }
+
+      for (const photo of newPhotos) {
+        try {
+          const fileExt = photo.uri.split(".").pop() || "jpg";
+          const mimeType = photo.type || (fileExt === "png" ? "image/png" : "image/jpeg");
+          const fileName = photo.name || `visit_${id}_${Date.now()}.${fileExt}`;
+          const fileSize = photo.size || 1024;
+          const uploaded = await storage.createFile(STORAGE_BUCKET_ID, ID.unique(), {
+            name: fileName, type: mimeType, size: fileSize, uri: photo.uri,
+          });
+          const fileUrl = storage.getFileView(STORAGE_BUCKET_ID, uploaded.$id).toString();
+          await databases.createDocument(DATABASE_ID, VISIT_PHOTOS_COLLECTION_ID, ID.unique(), {
+            visitId: id, url: fileUrl, caption: undefined,
+          });
+        } catch (photoErr) {
+          console.warn("Failed to upload photo:", photoErr);
+        }
+      }
+
+      setNewPhotos([]);
+      setEditing(false);
+      await loadData();
+    } catch (e: any) {
+      Alert.alert("Error", e.message || "Failed to save changes");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const openMaps = () => {
-    if (!visitData?.latitude || !visitData?.longitude) return;
+    const lat = editing ? editLatitude : visitData?.latitude;
+    const lng = editing ? editLongitude : visitData?.longitude;
+    if (!lat || !lng) return;
     const url = Platform.OS === "ios"
-      ? `maps://maps.apple.com/?ll=${visitData.latitude},${visitData.longitude}`
-      : `https://maps.google.com/?q=${visitData.latitude},${visitData.longitude}`;
+      ? `maps://maps.apple.com/?ll=${lat},${lng}`
+      : `https://maps.google.com/?q=${lat},${lng}`;
     Linking.openURL(url).catch(() => Alert.alert("Error", "Could not open maps"));
   };
 
@@ -227,7 +342,7 @@ export default function VisitDetailScreen() {
         <Text style={styles.loadingText}>Visit not found</Text>
         <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
           <ArrowLeft color="#16a34a" size={18} />
-          <Text style={styles.backBtnText}>Go Back</Text>
+          <Text style={styles.backBtnText}>Go Home</Text>
         </TouchableOpacity>
       </View>
     );
@@ -245,11 +360,11 @@ export default function VisitDetailScreen() {
     } catch { return ""; }
   };
 
-  const daysUntilNext = visitData.nextVisitDate
-    ? Math.ceil((new Date(visitData.nextVisitDate).getTime() - Date.now()) / (1000 * 3600 * 24))
+  const displayLat = editing ? editLatitude : visitData.latitude;
+  const displayLng = editing ? editLongitude : visitData.longitude;
+  const daysUntilNext = (editing ? (editNextVisitDate ? new Date(editNextVisitDate) : null) : visitData.nextVisitDate ? new Date(visitData.nextVisitDate) : null)
+    ? Math.ceil(((editing ? new Date(editNextVisitDate!) : new Date(visitData.nextVisitDate!)).getTime() - Date.now()) / (1000 * 3600 * 24))
     : null;
-
-  const hasGps = visitData.latitude && visitData.longitude;
 
   return (
     <View style={styles.outerContainer}>
@@ -259,11 +374,27 @@ export default function VisitDetailScreen() {
         </TouchableOpacity>
         <View style={styles.headerCenter}>
           <Text style={styles.headerTitle}>Visit Details</Text>
-          <Text style={styles.headerSub}>{formatDate(visitData.visitDate)}</Text>
+          <Text style={styles.headerSub}>{formatDate(editing ? (editVisitDate || visitData.visitDate) : visitData.visitDate)}</Text>
         </View>
-        <TouchableOpacity style={styles.shareBtn} onPress={shareViaWhatsApp}>
-          <Share2 color="#16a34a" size={20} />
-        </TouchableOpacity>
+        {editing ? (
+          <View style={{ flexDirection: "row", gap: 8 }}>
+            <TouchableOpacity style={styles.headerAction} onPress={cancelEditing}>
+              <X color="#dc2626" size={18} />
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.headerAction, styles.headerActionGreen, saving && styles.headerActionDisabled]} onPress={saveEdits} disabled={saving}>
+              <Check color="#fff" size={18} />
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <View style={{ flexDirection: "row", gap: 8 }}>
+            <TouchableOpacity style={styles.headerAction} onPress={shareViaWhatsApp}>
+              <Share2 color="#16a34a" size={18} />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.headerAction} onPress={startEditing}>
+              <Pencil color="#16a34a" size={18} />
+            </TouchableOpacity>
+          </View>
+        )}
       </View>
 
       <ScrollView
@@ -293,82 +424,200 @@ export default function VisitDetailScreen() {
           <ChevronRight color="#9ca3af" size={18} />
         </View>
 
-        <View style={styles.card}>
-          <View style={styles.cardRow}>
-            <View style={[styles.cardIcon, { backgroundColor: "#dcfce7" }]}>
-              <Calendar color="#16a34a" size={18} />
+        {editing ? (
+          <>
+            <View style={styles.card}>
+              <Text style={styles.editLabel}>Visit Date</Text>
+              <TouchableOpacity style={styles.dateInputRow} onPress={() => setShowEditVisitDatePicker(true)}>
+                <Calendar color="#9ca3af" size={16} />
+                <Text style={[styles.editInput, { flex: 1, marginLeft: 8 }, editVisitDate && { color: "#1a1a2e" }]}>{editVisitDate || "Select date"}</Text>
+              </TouchableOpacity>
+              {showEditVisitDatePicker && (
+                <DateTimePicker
+                  value={editVisitDate ? new Date(editVisitDate) : new Date()}
+                  mode="date"
+                  display={Platform.OS === "ios" ? "inline" : "default"}
+                  onValueChange={(_event, date) => {
+                    if (date) setEditVisitDate(date.toISOString().split("T")[0]);
+                  }}
+                  onDismiss={() => setShowEditVisitDatePicker(false)}
+                />
+              )}
             </View>
-            <View>
-              <Text style={styles.cardValueBold}>{formatDate(visitData.visitDate)}</Text>
-              <Text style={styles.cardValueSmall}>{formatTime(visitData.visitDate)}</Text>
-            </View>
-          </View>
-        </View>
 
-        {hasGps ? (
-          <View style={styles.card}>
-            <View style={styles.cardRow}>
-              <View style={[styles.cardIcon, { backgroundColor: "#dcfce7" }]}>
-                <MapPin color="#059669" size={18} />
-              </View>
-              <View style={styles.cardRowInfo}>
-                <Text style={styles.cardLabel}>GPS Location</Text>
-                <Text style={styles.cardValueBold}>
-                  {Number(visitData.latitude).toFixed(6)}, {Number(visitData.longitude).toFixed(6)}
+            <View style={styles.card}>
+              <Text style={styles.editLabel}>GPS Location</Text>
+              <TouchableOpacity style={styles.gpsButton} onPress={captureGPS} disabled={capturingGPS}>
+                <MapPin color={editLatitude ? "#16a34a" : "#6b7280"} size={16} />
+                <Text style={[styles.gpsButtonText, editLatitude ? { color: "#16a34a" } as const : null]}>
+                  {capturingGPS ? "Capturing..." : editLatitude ? `📍 ${editLatitude.toFixed(4)}, ${editLongitude?.toFixed(4)}` : "Capture Current Location"}
                 </Text>
-                {visitData.locationName ? (
-                  <Text style={styles.cardValueSmall}>{visitData.locationName}</Text>
-                ) : null}
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.card}>
+              <Text style={styles.editLabel}>Observations</Text>
+              <TextInput
+                style={[styles.editInput, styles.editTextArea]}
+                value={editObservations}
+                onChangeText={setEditObservations}
+                placeholder="Describe crop conditions, symptoms, field observations..."
+                placeholderTextColor="#9ca3af"
+                multiline
+                numberOfLines={5}
+                textAlignVertical="top"
+              />
+            </View>
+
+            <View style={styles.card}>
+              <View style={styles.cardHeader}>
+                <View style={[styles.cardIconSmall, { backgroundColor: "#fecdd3" }]}>
+                  <Camera color="#e11d48" size={14} />
+                </View>
+                <Text style={styles.cardTitle}>Photos</Text>
+              </View>
+              <View style={styles.photosGrid}>
+                {photos.map((photo) => (
+                  <TouchableOpacity key={photo.$id} style={styles.photoThumb} onPress={() => setSelectedPhoto(photo.url)}>
+                    <Image source={{ uri: photo.url }} style={styles.photoImage} />
+                  </TouchableOpacity>
+                ))}
+                {newPhotos.map((photo, idx) => (
+                  <View key={`new-${idx}`} style={styles.photoThumbContainer}>
+                    <Image source={{ uri: photo.uri }} style={styles.photoImage} />
+                    <TouchableOpacity style={styles.photoRemove} onPress={() => removeNewPhoto(idx)}>
+                      <X color="#fff" size={10} />
+                    </TouchableOpacity>
+                  </View>
+                ))}
+                <TouchableOpacity style={styles.photoAddButton} onPress={takePhoto}>
+                  <Camera color="#9ca3af" size={20} />
+                  <Text style={styles.photoAddText}>Camera</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.photoAddButton} onPress={pickImage}>
+                  <Camera color="#9ca3af" size={20} />
+                  <Text style={styles.photoAddText}>Gallery</Text>
+                </TouchableOpacity>
               </View>
             </View>
-            <TouchableOpacity style={styles.mapsButton} onPress={openMaps}>
-              <MapPin color="#059669" size={14} />
-              <Text style={styles.mapsButtonText}>Open in Google Maps</Text>
-              <ExternalLink color="#059669" size={12} />
-            </TouchableOpacity>
-          </View>
-        ) : null}
 
-        {visitData.observations ? (
+            <View style={styles.card}>
+              <Text style={styles.editLabel}>Next Visit Date</Text>
+              <TouchableOpacity style={styles.dateInputRow} onPress={() => setShowEditNextVisitDatePicker(true)}>
+                <Calendar color="#9ca3af" size={16} />
+                <Text style={[styles.editInput, { flex: 1, marginLeft: 8 }, editNextVisitDate && { color: "#1a1a2e" }]}>{editNextVisitDate || "Select date"}</Text>
+              </TouchableOpacity>
+              {showEditNextVisitDatePicker && (
+                <DateTimePicker
+                  value={editNextVisitDate ? new Date(editNextVisitDate) : new Date()}
+                  mode="date"
+                  display={Platform.OS === "ios" ? "inline" : "default"}
+                  onValueChange={(_event, date) => {
+                    if (date) setEditNextVisitDate(date.toISOString().split("T")[0]);
+                  }}
+                  onDismiss={() => setShowEditNextVisitDatePicker(false)}
+                />
+              )}
+
+              <View style={styles.quickRow}>
+                {[7, 14, 30].map((days) => {
+                  const d = new Date(); d.setDate(d.getDate() + days);
+                  const ds = d.toISOString().split("T")[0];
+                  return (
+                    <TouchableOpacity key={days} style={[styles.quickBtn, editNextVisitDate === ds && styles.quickBtnActive]} onPress={() => setEditNextVisitDate(ds)}>
+                      <Clock color={editNextVisitDate === ds ? "#16a34a" : "#6b7280"} size={12} />
+                      <Text style={[styles.quickBtnText, editNextVisitDate === ds && styles.quickBtnTextActive]}>{days} days</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              <Text style={[styles.editLabel, { marginTop: 12 }]}>Task for Next Visit</Text>
+              <TextInput
+                style={[styles.editInput, { minHeight: 80, textAlignVertical: "top" }]}
+                value={editNextVisitTask}
+                onChangeText={setEditNextVisitTask}
+                placeholder="Describe what needs to be checked..."
+                placeholderTextColor="#9ca3af"
+                multiline
+                numberOfLines={3}
+              />
+            </View>
+          </>
+        ) : (
+          <>
+            <View style={styles.card}>
+              <View style={styles.cardRow}>
+                <View style={[styles.cardIcon, { backgroundColor: "#dcfce7" }]}>
+                  <Calendar color="#16a34a" size={18} />
+                </View>
+                <View>
+                  <Text style={styles.cardValueBold}>{formatDate(visitData.visitDate)}</Text>
+                  <Text style={styles.cardValueSmall}>{formatTime(visitData.visitDate)}</Text>
+                </View>
+              </View>
+            </View>
+
+            {displayLat && displayLng ? (
+              <View style={styles.card}>
+                <View style={styles.cardRow}>
+                  <View style={[styles.cardIcon, { backgroundColor: "#dcfce7" }]}>
+                    <MapPin color="#059669" size={18} />
+                  </View>
+                  <View style={styles.cardRowInfo}>
+                    <Text style={styles.cardLabel}>GPS Location</Text>
+                    <Text style={styles.cardValueBold}>
+                      {Number(displayLat).toFixed(6)}, {Number(displayLng).toFixed(6)}
+                    </Text>
+                    {visitData.locationName ? (
+                      <Text style={styles.cardValueSmall}>{visitData.locationName}</Text>
+                    ) : null}
+                  </View>
+                </View>
+                <TouchableOpacity style={styles.mapsButton} onPress={openMaps}>
+                  <MapPin color="#059669" size={14} />
+                  <Text style={styles.mapsButtonText}>Open in Google Maps</Text>
+                  <ExternalLink color="#059669" size={12} />
+                </TouchableOpacity>
+              </View>
+            ) : null}
+
+            {visitData.observations ? (
+              <View style={styles.card}>
+                <View style={styles.cardHeader}>
+                  <View style={[styles.cardIconSmall, { backgroundColor: "#fef3c7" }]}>
+                    <FileText color="#b45309" size={14} />
+                  </View>
+                  <Text style={styles.cardTitle}>Observations</Text>
+                </View>
+                <Text style={styles.obsText}>{visitData.observations}</Text>
+              </View>
+            ) : null}
+          </>
+        )}
+
+        {photos.length > 0 && (
           <View style={styles.card}>
             <View style={styles.cardHeader}>
-              <View style={[styles.cardIconSmall, { backgroundColor: "#fef3c7" }]}>
-                <FileText color="#b45309" size={14} />
+              <View style={[styles.cardIconSmall, { backgroundColor: "#fecdd3" }]}>
+                <Camera color="#e11d48" size={14} />
               </View>
-              <Text style={styles.cardTitle}>Observations</Text>
+              <Text style={styles.cardTitle}>Photos ({photos.length})</Text>
             </View>
-            <Text style={styles.obsText}>{visitData.observations}</Text>
-          </View>
-        ) : null}
-
-        <View style={styles.card}>
-          <View style={styles.cardHeader}>
-            <View style={[styles.cardIconSmall, { backgroundColor: "#fecdd3" }]}>
-              <Camera color="#e11d48" size={14} />
+            <View style={styles.photosGrid}>
+              {photos.map((photo) => (
+                <TouchableOpacity key={photo.$id} style={styles.photoThumb} onPress={() => setSelectedPhoto(photo.url)}>
+                  <Image source={{ uri: photo.url }} style={styles.photoImage} />
+                  {photo.caption ? (
+                    <View style={styles.photoCaption}>
+                      <Text style={styles.photoCaptionText} numberOfLines={1}>{photo.caption}</Text>
+                    </View>
+                  ) : null}
+                </TouchableOpacity>
+              ))}
             </View>
-            <Text style={styles.cardTitle}>Photos {photos.length > 0 ? `(${photos.length})` : ""}</Text>
           </View>
-          <View style={styles.photosGrid}>
-            {photos.map((photo) => (
-              <TouchableOpacity key={photo.$id} style={styles.photoThumb} onPress={() => setSelectedPhoto(photo.url)}>
-                <Image source={{ uri: photo.url }} style={styles.photoImage} />
-                {photo.caption ? (
-                  <View style={styles.photoCaption}>
-                    <Text style={styles.photoCaptionText} numberOfLines={1}>{photo.caption}</Text>
-                  </View>
-                ) : null}
-              </TouchableOpacity>
-            ))}
-            <TouchableOpacity style={styles.photoAddButton} onPress={pickImage}>
-              <Camera color="#9ca3af" size={20} />
-              <Text style={styles.photoAddText}>Gallery</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.photoAddButton} onPress={takePhoto}>
-              <Camera color="#9ca3af" size={20} />
-              <Text style={styles.photoAddText}>Camera</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+        )}
 
         <View style={styles.card}>
           <View style={styles.cardHeader}>
@@ -426,7 +675,16 @@ export default function VisitDetailScreen() {
           )}
         </View>
 
-        {visitData.nextVisitDate ? (
+        {editing ? (
+          <View style={[styles.card, styles.followupCardPreview]}>
+            <View style={styles.cardHeader}>
+              <View style={[styles.cardIconSmall, { backgroundColor: "#fef3c7" }]}>
+                <Bell color="#b45309" size={14} />
+              </View>
+              <Text style={styles.cardTitle}>Follow-up (editing above)</Text>
+            </View>
+          </View>
+        ) : visitData.nextVisitDate ? (
           <View style={[styles.card, styles.followupCard]}>
             <View style={styles.cardHeader}>
               <View style={[styles.cardIconSmall, { backgroundColor: "#fef3c7" }]}>
@@ -476,6 +734,13 @@ export default function VisitDetailScreen() {
             </View>
           </View>
         )}
+
+        {!editing && (
+          <TouchableOpacity style={styles.editButton} onPress={startEditing}>
+            <Pencil color="#16a34a" size={16} />
+            <Text style={styles.editButtonText}>Edit Visit</Text>
+          </TouchableOpacity>
+        )}
       </ScrollView>
 
       <Modal visible={!!selectedPhoto} transparent animationType="fade" onRequestClose={() => setSelectedPhoto(null)}>
@@ -499,7 +764,9 @@ const styles = StyleSheet.create({
   headerCenter: { flex: 1, alignItems: "center" },
   headerTitle: { fontSize: 16, fontWeight: "600", color: "#1a1a2e" },
   headerSub: { fontSize: 11, color: "#6b7280" },
-  shareBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: "#dcfce780", justifyContent: "center", alignItems: "center" },
+  headerAction: { width: 36, height: 36, borderRadius: 18, backgroundColor: "#dcfce780", justifyContent: "center", alignItems: "center" },
+  headerActionGreen: { backgroundColor: "#16a34a" },
+  headerActionDisabled: { opacity: 0.5 },
   scrollView: { flex: 1 },
   loadingContainer: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#fafafa" },
   loadingText: { fontSize: 14, color: "#9ca3af" },
@@ -531,8 +798,6 @@ const styles = StyleSheet.create({
   photoImage: { width: "100%", height: "100%", resizeMode: "cover" },
   photoCaption: { position: "absolute", bottom: 0, left: 0, right: 0, backgroundColor: "rgba(0,0,0,0.5)", paddingHorizontal: 4, paddingVertical: 2 },
   photoCaptionText: { fontSize: 8, color: "#fff" },
-  photoAddButton: { width: "31%", aspectRatio: 1, borderRadius: 12, borderWidth: 1, borderColor: "#e5e7eb", borderStyle: "dashed", justifyContent: "center", alignItems: "center", gap: 2, backgroundColor: "#f9fafb" },
-  photoAddText: { fontSize: 10, color: "#9ca3af" },
   emptyText: { fontSize: 12, color: "#9ca3af", textAlign: "center", paddingVertical: 16 },
   recCard: { paddingVertical: 10 },
   recCardBorder: { borderBottomWidth: 1, borderBottomColor: "#f3f4f6" },
@@ -552,6 +817,7 @@ const styles = StyleSheet.create({
   recNotesCard: { backgroundColor: "#f9fafb", borderRadius: 8, padding: 8, marginTop: 4 },
   recNotesText: { fontSize: 12, color: "#6b7280" },
   followupCard: { borderColor: "#fde68a80" },
+  followupCardPreview: { borderColor: "#16a34a30" },
   followupBox: { backgroundColor: "#fffbeb", borderRadius: 12, padding: 12, gap: 8 },
   followupRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   followupDate: { fontSize: 14, fontWeight: "600", color: "#92400e" },
@@ -570,4 +836,21 @@ const styles = StyleSheet.create({
   lightboxClose: { position: "absolute", top: 60, right: 20, width: 40, height: 40, borderRadius: 20, backgroundColor: "rgba(255,255,255,0.1)", justifyContent: "center", alignItems: "center", zIndex: 10 },
   lightboxCloseText: { color: "#fff", fontSize: 18 },
   lightboxImage: { width: "100%", height: "80%", borderRadius: 12 },
+  editLabel: { fontSize: 13, fontWeight: "500", color: "#374151", marginBottom: 4 },
+  editInput: { backgroundColor: "#f9fafb", borderRadius: 12, padding: 12, fontSize: 14, color: "#9ca3af", borderWidth: 1, borderColor: "#e5e7eb" },
+  dateInputRow: { flexDirection: "row", alignItems: "center", backgroundColor: "#f3f4f6", borderRadius: 14, paddingHorizontal: 12, height: 46 },
+  editTextArea: { minHeight: 100, textAlignVertical: "top" },
+  gpsButton: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "#f3f4f6", borderRadius: 14, paddingHorizontal: 12, height: 46, borderWidth: 1, borderColor: "#e5e7eb" },
+  gpsButtonText: { fontSize: 14, color: "#6b7280" },
+  quickRow: { flexDirection: "row", gap: 8, marginTop: 8 },
+  quickBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4, paddingVertical: 8, borderRadius: 10, borderWidth: 1, borderColor: "#e5e7eb" },
+  quickBtnActive: { borderColor: "#16a34a", backgroundColor: "#dcfce720" },
+  quickBtnText: { fontSize: 12, color: "#6b7280", fontWeight: "500" },
+  quickBtnTextActive: { color: "#16a34a" },
+  editButton: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 14, borderRadius: 14, backgroundColor: "#ecfdf5", borderWidth: 1, borderColor: "#16a34a30" },
+  editButtonText: { fontSize: 14, fontWeight: "600", color: "#16a34a" },
+  photoAddButton: { width: "31%", aspectRatio: 1, borderRadius: 12, borderWidth: 1, borderColor: "#e5e7eb", borderStyle: "dashed", justifyContent: "center", alignItems: "center", gap: 2, backgroundColor: "#f9fafb" },
+  photoAddText: { fontSize: 10, color: "#9ca3af" },
+  photoThumbContainer: { width: "31%", aspectRatio: 1, borderRadius: 12, overflow: "hidden", position: "relative" },
+  photoRemove: { position: "absolute", top: 4, right: 4, width: 20, height: 20, borderRadius: 10, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", alignItems: "center" },
 });

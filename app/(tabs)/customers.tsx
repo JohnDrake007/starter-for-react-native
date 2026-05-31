@@ -1,7 +1,8 @@
 import { View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, RefreshControl } from "react-native";
 import { useState, useEffect, useCallback } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Search, Phone, MapPin, Sprout } from "@/components/Icons";
+import { useRouter } from "expo-router";
+import { Search, Phone, MapPin, Sprout, UserPlus } from "@/components/Icons";
 import { databases, Query, DATABASE_ID, CUSTOMERS_COLLECTION_ID } from "@/lib/appwrite";
 
 interface Customer {
@@ -25,6 +26,7 @@ const cropColors: Record<string, { bg: string; text: string }> = {
 
 export default function CustomersScreen() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [search, setSearch] = useState("");
   const [selectedCrop, setSelectedCrop] = useState("All");
@@ -33,17 +35,14 @@ export default function CustomersScreen() {
 
   const fetchCustomers = useCallback(async () => {
     try {
-      const queries = [Query.limit(100)];
-      if (search) queries.push(Query.search("name", search));
-      if (selectedCrop !== "All") queries.push(Query.equal("cropType", selectedCrop));
-      const res = await databases.listDocuments(DATABASE_ID, CUSTOMERS_COLLECTION_ID, queries);
+      const res = await databases.listDocuments(DATABASE_ID, CUSTOMERS_COLLECTION_ID, [Query.limit(500)]);
       setCustomers(res.documents as unknown as Customer[]);
     } catch {
       setCustomers([]);
     } finally {
       setLoading(false);
     }
-  }, [search, selectedCrop]);
+  }, []);
 
   useEffect(() => { fetchCustomers(); }, [fetchCustomers]);
 
@@ -52,6 +51,12 @@ export default function CustomersScreen() {
     await fetchCustomers();
     setRefreshing(false);
   }, [fetchCustomers]);
+
+  const filteredCustomers = customers.filter((c) => {
+    const matchesSearch = !search || c.name.toLowerCase().includes(search.toLowerCase()) || c.phone.includes(search);
+    const matchesCrop = selectedCrop === "All" || c.cropType === selectedCrop;
+    return matchesSearch && matchesCrop;
+  });
 
   const getInitials = (name: string) => {
     const parts = name.split(" ");
@@ -66,7 +71,7 @@ export default function CustomersScreen() {
   };
 
   const renderCustomer = ({ item }: { item: Customer }) => (
-    <View style={styles.customerCard}>
+    <TouchableOpacity style={styles.customerCard} onPress={() => router.push(`/customer/${item.$id}`)} activeOpacity={0.7}>
       <View style={[styles.avatar, { backgroundColor: getAvatarColor(item.name) }]}>
         <Text style={styles.avatarText}>{getInitials(item.name)}</Text>
       </View>
@@ -75,6 +80,7 @@ export default function CustomersScreen() {
           <Text style={styles.customerName} numberOfLines={1}>{item.name}</Text>
           {item.cropType && (
             <View style={[styles.cropBadge, { backgroundColor: cropColors[item.cropType]?.bg || "#f3f4f6" }]}>
+              <Sprout color={cropColors[item.cropType]?.text || "#6b7280"} size={10} />
               <Text style={[styles.cropBadgeText, { color: cropColors[item.cropType]?.text || "#374151" }]}>
                 {item.cropType}
               </Text>
@@ -92,12 +98,19 @@ export default function CustomersScreen() {
           </View>
         ) : null}
       </View>
-    </View>
+    </TouchableOpacity>
   );
 
   return (
     <View style={[styles.container, { paddingTop: insets.top + 16 }]}>
-      <Text style={styles.title}>Customers</Text>
+      <View style={styles.headerRow}>
+        <Text style={styles.title}>Customers</Text>
+        <TouchableOpacity style={styles.addButton} onPress={() => router.push("/customer/add")}>
+          <UserPlus color="#fff" size={16} />
+          <Text style={styles.addButtonText}>Add</Text>
+        </TouchableOpacity>
+      </View>
+
       <View style={styles.searchContainer}>
         <Search color="#9ca3af" size={18} />
         <TextInput
@@ -108,6 +121,7 @@ export default function CustomersScreen() {
           onChangeText={setSearch}
         />
       </View>
+
       <View style={styles.filterRow}>
         {cropTypes.map((crop) => (
           <TouchableOpacity
@@ -120,16 +134,19 @@ export default function CustomersScreen() {
           </TouchableOpacity>
         ))}
       </View>
+
+      <Text style={styles.countText}>{filteredCustomers.length} farmer{filteredCustomers.length !== 1 ? "s" : ""}</Text>
+
       {loading ? (
         <View style={styles.loadingContainer}><Text style={styles.loadingText}>Loading...</Text></View>
-      ) : customers.length === 0 ? (
+      ) : filteredCustomers.length === 0 ? (
         <View style={styles.loadingContainer}>
           <Text style={styles.emptyTitle}>No farmers found</Text>
           <Text style={styles.emptySub}>Try a different search or add a new customer</Text>
         </View>
       ) : (
         <FlatList
-          data={customers}
+          data={filteredCustomers}
           keyExtractor={(item) => item.$id}
           renderItem={renderCustomer}
           contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}
@@ -143,21 +160,25 @@ export default function CustomersScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#fafafa", paddingHorizontal: 16 },
-  title: { fontSize: 22, fontWeight: "700", color: "#1a1a2e", marginBottom: 12 },
+  headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12 },
+  title: { fontSize: 22, fontWeight: "700", color: "#1a1a2e" },
+  addButton: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: "#16a34a", paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20 },
+  addButtonText: { fontSize: 13, fontWeight: "600", color: "#fff" },
   searchContainer: { flexDirection: "row", alignItems: "center", backgroundColor: "#f3f4f6", borderRadius: 14, paddingHorizontal: 12, height: 46, marginBottom: 10 },
   searchInput: { flex: 1, marginLeft: 8, fontSize: 14, color: "#1a1a2e" },
-  filterRow: { flexDirection: "row", gap: 6, marginBottom: 14, overflow: "scroll" },
+  filterRow: { flexDirection: "row", gap: 6, marginBottom: 10, overflow: "scroll" },
   filterChip: { flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 20, backgroundColor: "#f3f4f6" },
   filterChipActive: { backgroundColor: "#16a34a" },
   filterText: { fontSize: 12, fontWeight: "500", color: "#6b7280" },
   filterTextActive: { color: "#fff" },
+  countText: { fontSize: 12, color: "#9ca3af", marginBottom: 8, fontWeight: "500" },
   customerCard: { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: "#fff", borderRadius: 14, padding: 12, borderWidth: 1, borderColor: "#e5e7eb" },
   avatar: { width: 44, height: 44, borderRadius: 22, justifyContent: "center", alignItems: "center" },
   avatarText: { color: "#fff", fontSize: 14, fontWeight: "700" },
   customerInfo: { flex: 1, gap: 2 },
   customerHeader: { flexDirection: "row", alignItems: "center", gap: 6 },
   customerName: { fontSize: 14, fontWeight: "600", color: "#1a1a2e", flex: 1 },
-  cropBadge: { paddingHorizontal: 6, paddingVertical: 1, borderRadius: 10 },
+  cropBadge: { flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 6, paddingVertical: 1, borderRadius: 10 },
   cropBadgeText: { fontSize: 10, fontWeight: "600" },
   phoneRow: { flexDirection: "row", alignItems: "center", gap: 4 },
   phoneText: { fontSize: 12, color: "#6b7280" },

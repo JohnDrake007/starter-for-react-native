@@ -135,3 +135,11 @@ export const Plus = createStrokeIcon(["M12 5v14M5 12h14"]);
 export const Trash2 = createStrokeIcon(["M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"]);
 
 export const ExternalLink = createStrokeIcon(["M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6", "M15 3h6v6", "M10 14L21 3"]);
+
+export const Pencil = createStrokeIcon(["M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"]);
+
+export const Pill = createStrokeIcon(["M10.5 1.5l-8.5 8.5a4.95 4.95 0 0 0 7 7l8.5-8.5a4.95 4.95 0 0 0-7-7z", "M9 6l9 9"]);
+
+export const Filter = createStrokeIcon(["M22 3H2l8 9.46V19l4 2v-8.54L22 3z"]);
+
+export const ClipboardCheck = createStrokeIcon(["M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2", "M9 2h6a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z", "M9 14l2 2 4-4"]);

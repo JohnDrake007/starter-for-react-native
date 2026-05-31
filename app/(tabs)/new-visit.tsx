@@ -1,6 +1,8 @@
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Alert, Image } from "react-native";
+import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Alert, Image, Platform } from "react-native";
 import { useState, useEffect, useCallback } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useRouter, useLocalSearchParams } from "expo-router";
+import DateTimePicker from "@react-native-community/datetimepicker";
 import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
 import { Search, MapPin, PlusCircle, Check, Package, Sprout, Calendar, ChevronRight, ChevronLeft, Camera, X, Trash2, Clock } from "@/components/Icons";
@@ -49,16 +51,19 @@ const steps = [
 
 export default function NewVisitScreen() {
   const insets = useSafeAreaInsets();
-  const [currentStep, setCurrentStep] = useState(1);
+  const router = useRouter();
+  const params = useLocalSearchParams<{ customerId?: string; customerName?: string }>();
+  const [currentStep, setCurrentStep] = useState(params.customerId ? 2 : 1);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [items, setItems] = useState<Item[]>([]);
   const [submitting, setSubmitting] = useState(false);
 
-  const [selectedCustomerId, setSelectedCustomerId] = useState("");
-  const [selectedCustomerName, setSelectedCustomerName] = useState("");
+  const [selectedCustomerId, setSelectedCustomerId] = useState(params.customerId || "");
+  const [selectedCustomerName, setSelectedCustomerName] = useState(params.customerName || "");
   const [customerSearch, setCustomerSearch] = useState("");
 
   const [visitDate, setVisitDate] = useState(new Date().toISOString().split("T")[0]);
+  const [showVisitDatePicker, setShowVisitDatePicker] = useState(false);
   const [observations, setObservations] = useState("");
   const [latitude, setLatitude] = useState<number | null>(null);
   const [longitude, setLongitude] = useState<number | null>(null);
@@ -72,6 +77,7 @@ export default function NewVisitScreen() {
   const [customItemName, setCustomItemName] = useState("");
 
   const [nextVisitDate, setNextVisitDate] = useState("");
+  const [showNextVisitDatePicker, setShowNextVisitDatePicker] = useState(false);
   const [nextVisitTask, setNextVisitTask] = useState("");
 
   useEffect(() => {
@@ -122,11 +128,17 @@ export default function NewVisitScreen() {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
         quality: 0.7,
-        allowsEditing: true,
+        allowsMultipleSelection: true,
+        allowsEditing: false,
       });
-      if (!result.canceled && result.assets[0]) {
-        const asset = result.assets[0];
-        setPhotos((prev) => [...prev, { uri: asset.uri, name: asset.fileName || undefined, type: asset.mimeType || undefined, size: asset.fileSize || undefined }]);
+      if (!result.canceled && result.assets.length > 0) {
+        const newPicks = result.assets.map((asset) => ({
+          uri: asset.uri,
+          name: asset.fileName || undefined,
+          type: asset.mimeType || undefined,
+          size: asset.fileSize || undefined,
+        }));
+        setPhotos((prev) => [...prev, ...newPicks]);
       }
     } catch {
       Alert.alert("Error", "Could not open gallery");
@@ -143,7 +155,7 @@ export default function NewVisitScreen() {
       const result = await ImagePicker.launchCameraAsync({
         mediaTypes: ['images'],
         quality: 0.7,
-        allowsEditing: true,
+        allowsEditing: false,
       });
       if (!result.canceled && result.assets[0]) {
         const asset = result.assets[0];
@@ -247,6 +259,7 @@ export default function NewVisitScreen() {
           setCurrentStep(1); setSelectedCustomerId(""); setSelectedCustomerName(""); setObservations("");
           setRecommendations([]); setNextVisitDate(""); setNextVisitTask("");
           setLatitude(null); setLongitude(null); setLocationName(""); setPhotos([]);
+          router.replace(`/visit/${visitId}`);
         }},
       ]);
     } catch (e: any) {
@@ -319,7 +332,21 @@ export default function NewVisitScreen() {
       <Text style={s.stepTitle}>Visit Details</Text>
 
       <Text style={s.label}>Visit Date</Text>
-      <TextInput style={s.input} value={visitDate} onChangeText={setVisitDate} placeholder="YYYY-MM-DD" placeholderTextColor="#9ca3af" />
+      <TouchableOpacity style={s.dateInputRow} onPress={() => setShowVisitDatePicker(true)}>
+        <Calendar color="#9ca3af" size={16} />
+        <Text style={[s.input, { flex: 1, marginLeft: 8 }, visitDate && { color: "#1a1a2e" }]}>{visitDate || "Select date"}</Text>
+      </TouchableOpacity>
+      {showVisitDatePicker && (
+        <DateTimePicker
+          value={visitDate ? new Date(visitDate) : new Date()}
+          mode="date"
+          display={Platform.OS === "ios" ? "inline" : "default"}
+          onValueChange={(_event, date) => {
+            if (date) setVisitDate(date.toISOString().split("T")[0]);
+          }}
+          onDismiss={() => setShowVisitDatePicker(false)}
+        />
+      )}
 
       <Text style={s.label}>GPS Location</Text>
       <TouchableOpacity style={s.gpsButton} onPress={captureGPS} disabled={capturingGPS}>
@@ -467,10 +494,21 @@ export default function NewVisitScreen() {
       <Text style={s.stepTitle}>Schedule Follow-up</Text>
 
       <Text style={s.label}>Next Visit Date</Text>
-      <View style={s.dateInputRow}>
+      <TouchableOpacity style={s.dateInputRow} onPress={() => setShowNextVisitDatePicker(true)}>
         <Calendar color="#9ca3af" size={16} />
-        <TextInput style={[s.input, { flex: 1, marginLeft: 8 }]} value={nextVisitDate} onChangeText={setNextVisitDate} placeholder="YYYY-MM-DD" placeholderTextColor="#9ca3af" />
-      </View>
+        <Text style={[s.input, { flex: 1, marginLeft: 8 }, nextVisitDate && { color: "#1a1a2e" }]}>{nextVisitDate || "Select date"}</Text>
+      </TouchableOpacity>
+      {showNextVisitDatePicker && (
+        <DateTimePicker
+          value={nextVisitDate ? new Date(nextVisitDate) : new Date()}
+          mode="date"
+          display={Platform.OS === "ios" ? "inline" : "default"}
+          onValueChange={(_event, date) => {
+            if (date) setNextVisitDate(date.toISOString().split("T")[0]);
+          }}
+          onDismiss={() => setShowNextVisitDatePicker(false)}
+        />
+      )}
 
       <View style={s.quickRow}>
         {[7, 14, 30].map((days) => (
@@ -555,40 +593,40 @@ export default function NewVisitScreen() {
         </View>
       </View>
 
-      <ScrollView style={s.scrollView} contentContainerStyle={{ paddingBottom: insets.bottom + 40, padding: 16 }}>
+      <ScrollView style={s.scrollView} contentContainerStyle={{ padding: 16, paddingBottom: 16 }}>
         {currentStep === 1 && renderStep1()}
         {currentStep === 2 && renderStep2()}
         {currentStep === 3 && renderStep3()}
         {currentStep === 4 && renderStep4()}
-
-        <View style={s.navRow}>
-          {currentStep > 1 && (
-            <TouchableOpacity style={[s.navButton, s.navButtonOutline]} onPress={() => setCurrentStep(currentStep - 1)}>
-              <ChevronLeft color="#1a1a2e" size={16} />
-              <Text style={s.navButtonOutlineText}>Back</Text>
-            </TouchableOpacity>
-          )}
-          {currentStep < 4 ? (
-            <TouchableOpacity
-              style={[s.navButton, s.navButtonPrimary, !canProceed() && s.navButtonDisabled]}
-              onPress={() => canProceed() && setCurrentStep(currentStep + 1)}
-              disabled={!canProceed()}
-            >
-              <Text style={s.navButtonPrimaryText}>Next</Text>
-              <ChevronRight color="#fff" size={16} />
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity
-              style={[s.navButton, s.navButtonPrimary, submitting && s.navButtonDisabled]}
-              onPress={handleSubmit}
-              disabled={submitting}
-            >
-              <Check color="#fff" size={16} />
-              <Text style={s.navButtonPrimaryText}>{submitting ? "Saving..." : "Submit Visit"}</Text>
-            </TouchableOpacity>
-          )}
-        </View>
       </ScrollView>
+
+      <View style={[s.navRow, { paddingBottom: insets.bottom + 12, paddingHorizontal: 16, backgroundColor: "#fff", borderTopWidth: 1, borderTopColor: "#e5e7eb" }]}>
+        {currentStep > 1 && (
+          <TouchableOpacity style={[s.navButton, s.navButtonOutline]} onPress={() => setCurrentStep(currentStep - 1)}>
+            <ChevronLeft color="#1a1a2e" size={16} />
+            <Text style={s.navButtonOutlineText}>Back</Text>
+          </TouchableOpacity>
+        )}
+        {currentStep < 4 ? (
+          <TouchableOpacity
+            style={[s.navButton, s.navButtonPrimary, !canProceed() && s.navButtonDisabled]}
+            onPress={() => canProceed() && setCurrentStep(currentStep + 1)}
+            disabled={!canProceed()}
+          >
+            <Text style={s.navButtonPrimaryText}>Next</Text>
+            <ChevronRight color="#fff" size={16} />
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity
+            style={[s.navButton, s.navButtonPrimary, submitting && s.navButtonDisabled]}
+            onPress={handleSubmit}
+            disabled={submitting}
+          >
+            <Check color="#fff" size={16} />
+            <Text style={s.navButtonPrimaryText}>{submitting ? "Saving..." : "Submit Visit"}</Text>
+          </TouchableOpacity>
+        )}
+      </View>
     </View>
   );
 }
@@ -671,7 +709,7 @@ const s = StyleSheet.create({
   summaryRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   summaryLabel: { fontSize: 12, color: "#6b7280" },
   summaryValue: { fontSize: 12, fontWeight: "500", color: "#1a1a2e" },
-  navRow: { flexDirection: "row", gap: 10, marginTop: 20 },
+  navRow: { flexDirection: "row", gap: 10, paddingTop: 12 },
   navButton: { flex: 1, flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 4, height: 46, borderRadius: 14 },
   navButtonOutline: { borderWidth: 1, borderColor: "#e5e7eb", backgroundColor: "#fff" },
   navButtonOutlineText: { fontSize: 14, fontWeight: "600", color: "#1a1a2e" },
