@@ -1,8 +1,8 @@
-import { View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, RefreshControl, Linking } from "react-native";
+import { View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, RefreshControl, ScrollView, Linking } from "react-native";
 import { useState, useCallback } from "react";
 import { useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ArrowLeft, Search, Package, Tag, Beaker, Share2, Plus, X } from "@/components/Icons";
+import { ArrowLeft, Search, Package, Tag, Beaker, Share2, Plus, X, Calendar, Clock } from "@/components/Icons";
 import { ITEMS_COLLECTION_ID } from "@/lib/appwrite";
 import { getCollection } from "@/lib/sync-manager";
 import { useNetwork } from "@/lib/network-provider";
@@ -13,9 +13,11 @@ interface Item {
   category?: string;
   unit?: string;
   tallyCode?: string;
+  expiryDate?: string;
 }
 
 const categories = ["All", "Fertilizer", "Insecticide", "Fungicide", "Herbicide", "PGR", "Organic", "Micronutrient", "Other"];
+const expirySteps = [7, 15, 30, 60, 90, 180, 365];
 
 const getCategoryColor = (category: string | null | undefined) => {
   switch (category) {
@@ -49,6 +51,7 @@ export default function ProductCatalogScreen() {
   const [items, setItems] = useState<Item[]>([]);
   const [search, setSearch] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All");
+  const [expiryDays, setExpiryDays] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const { syncNow } = useNetwork();
@@ -64,6 +67,7 @@ export default function ProductCatalogScreen() {
         category: d.category || undefined,
         unit: d.unit || undefined,
         tallyCode: d.tallyCode || undefined,
+        expiryDate: d.expiryDate || undefined,
       })));
     } catch {}
     setLoading(false);
@@ -83,6 +87,10 @@ export default function ProductCatalogScreen() {
     if (search) {
       const q = search.toLowerCase();
       if (!item.name.toLowerCase().includes(q) && !(item.tallyCode || "").toLowerCase().includes(q)) return false;
+    }
+    if (expiryDays !== null && item.expiryDate) {
+      const daysUntil = Math.ceil((new Date(item.expiryDate).getTime() - Date.now()) / (1000 * 3600 * 24));
+      if (daysUntil > expiryDays || daysUntil < 0) return false;
     }
     return true;
   });
@@ -121,23 +129,10 @@ export default function ProductCatalogScreen() {
     Linking.openURL(`https://wa.me/?text=${encodeURIComponent(lines.join("\n"))}`);
   };
 
-  const renderCategory = ({ item: cat }: { item: string }) => {
-    const isActive = selectedCategory === cat;
-    return (
-      <TouchableOpacity
-        style={[styles.categoryPill, isActive && styles.categoryPillActive]}
-        onPress={() => setSelectedCategory(cat)}
-      >
-        {cat !== "All" && <Text style={styles.categoryIcon}>{getCategoryIcon(cat)}</Text>}
-        <Text style={[styles.categoryPillText, isActive && styles.categoryPillTextActive]}>{cat}</Text>
-      </TouchableOpacity>
-    );
-  };
-
   const renderItem = ({ item }: { item: Item }) => {
     const colors = getCategoryColor(item.category);
     return (
-      <View style={styles.productCard}>
+      <TouchableOpacity style={styles.productCard} onPress={() => router.push(`/product/${item.$id}`)} activeOpacity={0.6}>
         <View style={[styles.productIcon, { backgroundColor: colors.bg }]}>
           <Package color={colors.text} size={20} />
         </View>
@@ -159,12 +154,25 @@ export default function ProductCatalogScreen() {
             {item.tallyCode && (
               <Text style={styles.tallyCode}>{item.tallyCode}</Text>
             )}
+            {item.expiryDate && (() => {
+              const daysUntil = Math.ceil((new Date(item.expiryDate).getTime() - Date.now()) / (1000 * 3600 * 24));
+              const isExpired = daysUntil < 0;
+              const isUrgent = daysUntil >= 0 && daysUntil <= 30;
+              return (
+                <View style={[styles.expiryBadge, isExpired && styles.expiryBadgeExpired, isUrgent && styles.expiryBadgeUrgent]}>
+                  <Clock color={isExpired ? "#dc2626" : isUrgent ? "#f59e0b" : "#16a34a"} size={9} />
+                  <Text style={[styles.expiryBadgeText, isExpired && styles.expiryBadgeTextExpired, isUrgent && styles.expiryBadgeTextUrgent]}>
+                    {isExpired ? "Expired" : `${daysUntil}d`}
+                  </Text>
+                </View>
+              );
+            })()}
           </View>
         </View>
         <TouchableOpacity style={styles.shareBtn} onPress={() => shareProductWhatsApp(item)}>
           <Share2 color="#9ca3af" size={16} />
         </TouchableOpacity>
-      </View>
+      </TouchableOpacity>
     );
   };
 
@@ -201,14 +209,44 @@ export default function ProductCatalogScreen() {
         </View>
       </View>
 
-      <FlatList
-        data={categories}
-        renderItem={renderCategory}
-        keyExtractor={(cat) => cat}
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.categoryList}
-      />
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.categoryScrollView} contentContainerStyle={styles.categoryList}>
+        {categories.map((cat) => {
+          const isActive = selectedCategory === cat;
+          return (
+            <TouchableOpacity
+              key={cat}
+              style={[styles.categoryPill, isActive && styles.categoryPillActive]}
+              onPress={() => setSelectedCategory(cat)}
+            >
+              {cat !== "All" && <Text style={styles.categoryIcon}>{getCategoryIcon(cat)}</Text>}
+              <Text style={[styles.categoryPillText, isActive && styles.categoryPillTextActive]}>{cat}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+
+      <View style={styles.expiryFilterContainer}>
+        <View style={styles.expiryFilterHeader}>
+          <Clock color="#6b7280" size={14} />
+          <Text style={styles.expiryFilterLabel}>Expiring within</Text>
+          {expiryDays !== null ? (
+            <TouchableOpacity onPress={() => setExpiryDays(null)}>
+              <Text style={styles.expiryClear}>Clear</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+        <View style={styles.expirySliderRow}>
+          {expirySteps.map((d) => (
+            <TouchableOpacity
+              key={d}
+              style={[styles.expiryStep, expiryDays === d && styles.expiryStepActive]}
+              onPress={() => setExpiryDays(expiryDays === d ? null : d)}
+            >
+              <Text style={[styles.expiryStepText, expiryDays === d && styles.expiryStepTextActive]}>{d === 0 ? "Expired" : `${d}d`}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </View>
 
       {loading ? (
         <View style={styles.loadingContainer}>
@@ -257,8 +295,9 @@ const styles = StyleSheet.create({
   searchContainer: { paddingHorizontal: 16, paddingVertical: 12, backgroundColor: "#fff", borderBottomWidth: 1, borderBottomColor: "#e5e7eb" },
   searchBox: { flexDirection: "row", alignItems: "center", backgroundColor: "#f3f4f6", borderRadius: 14, paddingHorizontal: 12, height: 44 },
   searchInput: { flex: 1, marginLeft: 8, fontSize: 14, color: "#1a1a2e" },
-  categoryList: { paddingHorizontal: 16, paddingVertical: 8, gap: 6 },
-  categoryPill: { flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 6, paddingHorizontal: 12, borderRadius: 20, backgroundColor: "#f3f4f6", borderWidth: 1, borderColor: "transparent" },
+  categoryScrollView: { backgroundColor: "#fff", borderBottomWidth: 1, borderBottomColor: "#e5e7eb" },
+  categoryList: { paddingHorizontal: 16, paddingVertical: 8, gap: 6, alignItems: "center" },
+  categoryPill: { flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 7, paddingHorizontal: 12, borderRadius: 20, backgroundColor: "#f3f4f6", borderWidth: 1, borderColor: "transparent" },
   categoryPillActive: { backgroundColor: "#16a34a", borderColor: "#16a34a" },
   categoryPillText: { fontSize: 12, fontWeight: "500", color: "#6b7280" },
   categoryPillTextActive: { color: "#fff" },
@@ -281,5 +320,20 @@ const styles = StyleSheet.create({
   unitText: { fontSize: 10, color: "#9ca3af" },
   tallyCode: { fontSize: 10, color: "#9ca3af", fontFamily: "monospace" },
   shareBtn: { width: 32, height: 32, borderRadius: 16, justifyContent: "center", alignItems: "center" },
+  expiryFilterContainer: { backgroundColor: "#fff", paddingHorizontal: 16, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: "#e5e7eb" },
+  expiryFilterHeader: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 6 },
+  expiryFilterLabel: { fontSize: 12, fontWeight: "500", color: "#374151", flex: 1 },
+  expiryClear: { fontSize: 12, color: "#dc2626", fontWeight: "600" },
+  expirySliderRow: { flexDirection: "row", gap: 6 },
+  expiryStep: { paddingVertical: 5, paddingHorizontal: 10, borderRadius: 16, backgroundColor: "#f3f4f6", borderWidth: 1, borderColor: "transparent" },
+  expiryStepActive: { backgroundColor: "#dcfce7", borderColor: "#16a34a30" },
+  expiryStepText: { fontSize: 11, fontWeight: "500", color: "#6b7280" },
+  expiryStepTextActive: { color: "#16a34a", fontWeight: "600" },
+  expiryBadge: { flexDirection: "row", alignItems: "center", gap: 2, paddingHorizontal: 4, paddingVertical: 1, borderRadius: 6, backgroundColor: "#dcfce7" },
+  expiryBadgeExpired: { backgroundColor: "#fecdd3" },
+  expiryBadgeUrgent: { backgroundColor: "#fef3c7" },
+  expiryBadgeText: { fontSize: 9, fontWeight: "600", color: "#16a34a" },
+  expiryBadgeTextExpired: { color: "#dc2626" },
+  expiryBadgeTextUrgent: { color: "#b45309" },
   fab: { position: "absolute", right: 16, width: 56, height: 56, borderRadius: 28, backgroundColor: "#16a34a", justifyContent: "center", alignItems: "center", shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 8 },
 });

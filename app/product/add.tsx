@@ -2,7 +2,7 @@ import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Alert,
 import { useState } from "react";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ArrowLeft, Plus, Tag, Beaker, Hash } from "@/components/Icons";
+import { ArrowLeft, Plus, Tag, Beaker, Hash, Calendar } from "@/components/Icons";
 import { ITEMS_COLLECTION_ID } from "@/lib/appwrite";
 import { createDocument } from "@/lib/sync-manager";
 
@@ -16,6 +16,7 @@ export default function AddProductScreen() {
   const [category, setCategory] = useState("");
   const [unit, setUnit] = useState("");
   const [tallyCode, setTallyCode] = useState("");
+  const [expiryDate, setExpiryDate] = useState("");
   const [saving, setSaving] = useState(false);
 
   const handleSave = async () => {
@@ -30,6 +31,7 @@ export default function AddProductScreen() {
         category: category || null,
         unit: unit || null,
         tallyCode: tallyCode.trim() || null,
+        expiryDate: expiryDate || null,
       });
       router.back();
     } catch (e: any) {
@@ -105,6 +107,19 @@ export default function AddProductScreen() {
               value={tallyCode}
               onChangeText={setTallyCode}
               autoCapitalize="characters"
+            />
+          </View>
+        </View>
+      <View style={styles.fieldGroup}>
+          <Text style={styles.label}>Expiry Date</Text>
+          <View style={styles.inputRow}>
+            <Calendar color="#9ca3af" size={16} />
+            <TextInput
+              style={styles.input}
+              placeholder="YYYY-MM-DD"
+              placeholderTextColor="#9ca3af"
+              value={expiryDate}
+              onChangeText={setExpiryDate}
             />
           </View>
         </View>

@@ -20,6 +20,7 @@ function AppContent() {
         <Stack.Screen name="visits/index" options={{ headerShown: false, animation: "slide_from_right" }} />
         <Stack.Screen name="products/index" options={{ headerShown: false, animation: "slide_from_right" }} />
         <Stack.Screen name="product/add" options={{ headerShown: false, animation: "slide_from_right" }} />
+        <Stack.Screen name="product/[id]" options={{ headerShown: false, animation: "slide_from_right" }} />
       </Stack>
     </View>
   );

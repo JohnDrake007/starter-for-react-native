@@ -2,7 +2,7 @@ import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity, A
 import { useState, useCallback } from "react";
 import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ArrowLeft, Phone, MapPin, Sprout, Calendar, Package, Share2, Pencil, Check, X, PlusCircle, ExternalLink, Eye, Camera, ArrowRight } from "@/components/Icons";
+import { ArrowLeft, Phone, MapPin, Sprout, Calendar, Package, Share2, Pencil, Check, X, PlusCircle, ExternalLink, Eye, Camera, ArrowRight, Users } from "@/components/Icons";
 import { CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, ITEMS_COLLECTION_ID } from "@/lib/appwrite";
 import { getCollection, getDocument, updateDocument } from "@/lib/sync-manager";
 import { useNetwork } from "@/lib/network-provider";
@@ -166,6 +166,7 @@ export default function CustomerDetailScreen() {
     lines.push(`*Name:* ${customer.name}`);
     lines.push(`*Phone:* ${customer.phone}`);
     if (customer.address) lines.push(`*Address:* ${customer.address}`);
+    if (customer.contactName) lines.push(`*Contact Person:* ${customer.contactName}${customer.contactPhone ? ` (${customer.contactPhone})` : ""}`);
     if (customer.cropType) lines.push(`*Crop:* ${customer.cropType}`);
     if (customer.latitude && customer.longitude) {
       lines.push(`*GPS:* ${Number(customer.latitude).toFixed(4)}, ${Number(customer.longitude).toFixed(4)}`);
@@ -320,6 +321,18 @@ export default function CustomerDetailScreen() {
                   <View style={styles.infoTextCol}>
                     <Text style={styles.infoLabel}>Address</Text>
                     <Text style={styles.infoValue} numberOfLines={2}>{customer.address}</Text>
+                  </View>
+                </View>
+              ) : null}
+
+              {customer.contactName ? (
+                <View style={styles.infoRow}>
+                  <View style={styles.infoIcon}>
+                    <Users color="#16a34a" size={16} />
+                  </View>
+                  <View style={styles.infoTextCol}>
+                    <Text style={styles.infoLabel}>Contact Person</Text>
+                    <Text style={styles.infoValue}>{customer.contactName}{customer.contactPhone ? ` — ${customer.contactPhone}` : ""}</Text>
                   </View>
                 </View>
               ) : null}

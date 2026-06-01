@@ -332,6 +332,37 @@ export default function VisitDetailScreen() {
     Linking.openURL(whatsappUrl).catch(() => Linking.openURL(`https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`));
   };
 
+  const shareShopReport = () => {
+    if (!visitData || !customer) return;
+    const lines: string[] = [];
+    lines.push("*Farm Advisory*");
+    lines.push("");
+    lines.push(`*Farmer:* ${customer.name}`);
+    if (customer.cropType) lines.push(`*Crop:* ${customer.cropType}`);
+    lines.push(`*Phone:* ${customer.phone}`);
+    lines.push("");
+    if (visitData.observations) {
+      lines.push("*Observations:*");
+      lines.push(visitData.observations);
+      lines.push("");
+    }
+    if (recommendations.length > 0) {
+      lines.push("*Recommendations:*");
+      recommendations.forEach((rec, i) => {
+        let line = `  ${i + 1}. ${rec.name}`;
+        if (rec.dosage) line += ` — ${rec.dosage}`;
+        if (rec.quantity) line += ` (${rec.quantity})`;
+        lines.push(line);
+      });
+      lines.push("");
+    }
+    const text = lines.join("\n");
+    const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(text)}`;
+    Linking.openURL(whatsappUrl).catch(() => Linking.openURL(`https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`));
+  };
+
+  const [showShareMenu, setShowShareMenu] = useState(false);
+
   if (loading) {
     return (
       <View style={[styles.loadingContainer, { paddingTop: insets.top }]}>
@@ -391,11 +422,24 @@ export default function VisitDetailScreen() {
           </View>
         ) : (
           <View style={{ flexDirection: "row", gap: 8 }}>
-            <TouchableOpacity style={styles.headerAction} onPress={shareViaWhatsApp}>
+            <TouchableOpacity style={styles.headerAction} onPress={() => setShowShareMenu(!showShareMenu)}>
               <Share2 color="#16a34a" size={18} />
             </TouchableOpacity>
             <TouchableOpacity style={styles.headerAction} onPress={startEditing}>
               <Pencil color="#16a34a" size={18} />
+            </TouchableOpacity>
+          </View>
+        )}
+        {showShareMenu && (
+          <View style={styles.shareMenu}>
+            <TouchableOpacity style={styles.shareMenuItem} onPress={() => { setShowShareMenu(false); shareViaWhatsApp(); }}>
+              <Text style={styles.shareMenuTitle}>Full Report</Text>
+              <Text style={styles.shareMenuDesc}>Farmer details, GPS, observations, recommendations & next visit</Text>
+            </TouchableOpacity>
+            <View style={styles.shareMenuDivider} />
+            <TouchableOpacity style={styles.shareMenuItem} onPress={() => { setShowShareMenu(false); shareShopReport(); }}>
+              <Text style={styles.shareMenuTitle}>Shop Report</Text>
+              <Text style={styles.shareMenuDesc}>Farmer details, observations & recommendations only</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -816,6 +860,11 @@ const styles = StyleSheet.create({
   recDetails: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   recDetail: { flexDirection: "row", alignItems: "center" },
   recDetailLabel: { fontSize: 10, color: "#6b7280" },
+  shareMenu: { position: "absolute", top: 60, right: 16, backgroundColor: "#fff", borderRadius: 12, borderWidth: 1, borderColor: "#e5e7eb", shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 8, elevation: 8, zIndex: 100, width: 260 },
+  shareMenuItem: { padding: 12 },
+  shareMenuTitle: { fontSize: 14, fontWeight: "600", color: "#1a1a2e" },
+  shareMenuDesc: { fontSize: 11, color: "#6b7280", marginTop: 2 },
+  shareMenuDivider: { height: 1, backgroundColor: "#f3f4f6" },
   recDetailValue: { fontSize: 12, fontWeight: "600", color: "#16a34a" },
   recDetailValueAmber: { fontSize: 12, fontWeight: "600", color: "#b45309" },
   recNotesCard: { backgroundColor: "#f9fafb", borderRadius: 8, padding: 8, marginTop: 4 },

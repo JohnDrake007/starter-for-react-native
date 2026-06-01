@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, RefreshControl } from "react-native";
+import { View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, RefreshControl, ScrollView } from "react-native";
 import { useState, useCallback } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useFocusEffect } from "expo-router";
@@ -131,7 +131,7 @@ export default function CustomersScreen() {
         />
       </View>
 
-      <View style={styles.filterRow}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterRow} contentContainerStyle={styles.filterRowContent}>
         {cropTypes.map((crop) => (
           <TouchableOpacity
             key={crop}
@@ -142,7 +142,7 @@ export default function CustomersScreen() {
             <Text style={[styles.filterText, selectedCrop === crop && styles.filterTextActive]}>{crop}</Text>
           </TouchableOpacity>
         ))}
-      </View>
+      </ScrollView>
 
       <Text style={styles.countText}>{filteredCustomers.length} farmer{filteredCustomers.length !== 1 ? "s" : ""}</Text>
 
@@ -175,8 +175,9 @@ const styles = StyleSheet.create({
   addButtonText: { fontSize: 13, fontWeight: "600", color: "#fff" },
   searchContainer: { flexDirection: "row", alignItems: "center", backgroundColor: "#f3f4f6", borderRadius: 14, paddingHorizontal: 12, height: 46, marginBottom: 10 },
   searchInput: { flex: 1, marginLeft: 8, fontSize: 14, color: "#1a1a2e" },
-  filterRow: { flexDirection: "row", gap: 6, marginBottom: 10, overflow: "scroll" },
-  filterChip: { flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 20, backgroundColor: "#f3f4f6" },
+  filterRow: { marginBottom: 10 },
+  filterRowContent: { gap: 6, paddingHorizontal: 4, paddingVertical: 4, alignItems: "center" },
+  filterChip: { flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 20, backgroundColor: "#f3f4f6" },
   filterChipActive: { backgroundColor: "#16a34a" },
   filterText: { fontSize: 12, fontWeight: "500", color: "#6b7280" },
   filterTextActive: { color: "#fff" },

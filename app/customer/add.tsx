@@ -29,6 +29,8 @@ export default function AddCustomerScreen() {
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
   const [cropType, setCropType] = useState("");
+  const [contactName, setContactName] = useState("");
+  const [contactPhone, setContactPhone] = useState("");
   const [capturingGPS, setCapturingGPS] = useState(false);
   const [latitude, setLatitude] = useState<number | null>(null);
   const [longitude, setLongitude] = useState<number | null>(null);
@@ -62,6 +64,8 @@ export default function AddCustomerScreen() {
         phone: phone.trim(),
         address: address.trim() || undefined,
         cropType: cropType || undefined,
+        contactName: contactName.trim() || undefined,
+        contactPhone: contactPhone.trim() || undefined,
         latitude: latitude || undefined,
         longitude: longitude || undefined,
       });
@@ -128,6 +132,32 @@ export default function AddCustomerScreen() {
               onChangeText={setAddress}
               placeholder="Village/Town, District"
               placeholderTextColor="#9ca3af"
+            />
+          </View>
+        </View>
+
+        <View style={s.card}>
+          <Text style={s.label}>Contact Person Name</Text>
+          <TextInput
+            style={s.input}
+            value={contactName}
+            onChangeText={setContactName}
+            placeholder="Person to contact at the farm"
+            placeholderTextColor="#9ca3af"
+          />
+        </View>
+
+        <View style={s.card}>
+          <Text style={s.label}>Contact Person Phone</Text>
+          <View style={s.phoneRow}>
+            <Phone color="#9ca3af" size={16} />
+            <TextInput
+              style={[s.input, { flex: 1, marginLeft: 8 }]}
+              value={contactPhone}
+              onChangeText={setContactPhone}
+              placeholder="+91 98765 43210"
+              placeholderTextColor="#9ca3af"
+              keyboardType="phone-pad"
             />
           </View>
         </View>
