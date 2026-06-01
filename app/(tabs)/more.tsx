@@ -1,6 +1,6 @@
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from "react-native";
-import { Package, Database, Leaf, Info } from "@/components/Icons";
-import { ping } from "@/lib/appwrite";
+import { Package, Database, Leaf, Info, RefreshCw, Wifi, WifiOff, CloudOff } from "@/components/Icons";
+import { useNetwork } from "@/lib/network-provider";
 import { useState } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
@@ -8,21 +8,55 @@ import { useRouter } from "expo-router";
 export default function MoreScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const [pingStatus, setPingStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
+  const { isOnline, syncStatus, lastSyncTime, pendingCount, syncNow } = useNetwork();
 
-  const handlePing = async () => {
-    setPingStatus("loading");
-    try {
-      await ping();
-      setPingStatus("success");
-    } catch {
-      setPingStatus("error");
-    }
+  const handleSync = async () => {
+    await syncNow();
+  };
+
+  const getStatusColor = () => {
+    if (!isOnline) return "#dc2626"; // red
+    if (syncStatus === "syncing") return "#f59e0b"; // amber
+    if (syncStatus === "error") return "#dc2626"; // red
+    return "#16a34a"; // green
+  };
+
+  const formatLastSync = () => {
+    if (!lastSyncTime) return "Never synced";
+    const date = new Date(lastSyncTime);
+    return date.toLocaleDateString("en-IN", { 
+      day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" 
+    });
   };
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ paddingTop: insets.top + 16, paddingBottom: insets.bottom + 24, padding: 16, gap: 12 }}>
       <Text style={styles.title}>More</Text>
+
+      <View style={styles.syncCard}>
+        <View style={styles.syncHeader}>
+          <View style={styles.syncStatusRow}>
+            <View style={[styles.statusDot, { backgroundColor: getStatusColor() }]} />
+            <Text style={styles.syncStatusText}>
+              {!isOnline ? "Offline" : syncStatus === "syncing" ? "Syncing..." : syncStatus === "error" ? "Sync Error" : "Online & Synced"}
+            </Text>
+          </View>
+          {pendingCount > 0 && (
+            <View style={styles.pendingBadge}>
+              <Text style={styles.pendingBadgeText}>{pendingCount} pending</Text>
+            </View>
+          )}
+        </View>
+        <Text style={styles.lastSyncText}>Last synced: {formatLastSync()}</Text>
+        <TouchableOpacity
+          style={[styles.syncButton, (syncStatus === "syncing" || !isOnline) && styles.syncButtonDisabled]}
+          onPress={handleSync}
+          disabled={syncStatus === "syncing" || !isOnline}
+        >
+          <RefreshCw color="#fff" size={16} />
+          <Text style={styles.syncButtonText}>Sync Now</Text>
+        </TouchableOpacity>
+      </View>
 
       <TouchableOpacity style={styles.menuCard} onPress={() => router.push("/products")}>
         <View style={[styles.menuIcon, { backgroundColor: "#dcfce7" }]}>
@@ -44,15 +78,7 @@ export default function MoreScreen() {
         </View>
       </View>
 
-      <TouchableOpacity
-        style={[styles.pingButton, pingStatus === "success" && styles.pingSuccess, pingStatus === "error" && styles.pingError]}
-        onPress={handlePing}
-        disabled={pingStatus === "loading"}
-      >
-        <Text style={styles.pingButtonText}>
-          {pingStatus === "loading" ? "Connecting..." : pingStatus === "success" ? "Connected!" : pingStatus === "error" ? "Connection Failed" : "Test Appwrite Connection"}
-        </Text>
-      </TouchableOpacity>
+
 
       <View style={styles.aboutCard}>
         <View style={styles.aboutHeader}>
@@ -109,10 +135,17 @@ const styles = StyleSheet.create({
   menuInfo: { flex: 1 },
   menuTitle: { fontSize: 14, fontWeight: "600", color: "#1a1a2e" },
   menuSub: { fontSize: 12, color: "#6b7280" },
-  pingButton: { backgroundColor: "#16a34a", borderRadius: 14, padding: 14, alignItems: "center", marginTop: 4 },
-  pingSuccess: { backgroundColor: "#059669" },
-  pingError: { backgroundColor: "#dc2626" },
-  pingButtonText: { color: "#fff", fontSize: 15, fontWeight: "600" },
+  syncCard: { backgroundColor: "#fff", borderRadius: 14, padding: 16, borderWidth: 1, borderColor: "#e5e7eb", marginBottom: 4 },
+  syncHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 6 },
+  syncStatusRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  statusDot: { width: 8, height: 8, borderRadius: 4 },
+  syncStatusText: { fontSize: 14, fontWeight: "600", color: "#1a1a2e" },
+  pendingBadge: { backgroundColor: "#fef3c7", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10 },
+  pendingBadgeText: { fontSize: 10, fontWeight: "600", color: "#92400e" },
+  lastSyncText: { fontSize: 12, color: "#6b7280", marginBottom: 12 },
+  syncButton: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: "#16a34a", borderRadius: 10, paddingVertical: 10 },
+  syncButtonDisabled: { opacity: 0.5 },
+  syncButtonText: { color: "#fff", fontSize: 14, fontWeight: "600" },
   aboutCard: { backgroundColor: "#fff", borderRadius: 14, padding: 16, borderWidth: 1, borderColor: "#e5e7eb" },
   aboutHeader: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 12 },
   aboutTitle: { fontSize: 15, fontWeight: "600", color: "#1a1a2e" },

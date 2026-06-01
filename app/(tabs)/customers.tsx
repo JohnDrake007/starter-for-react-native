@@ -3,7 +3,9 @@ import { useState, useCallback } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useFocusEffect } from "expo-router";
 import { Search, Phone, MapPin, Sprout, UserPlus } from "@/components/Icons";
-import { databases, Query, DATABASE_ID, CUSTOMERS_COLLECTION_ID } from "@/lib/appwrite";
+import { CUSTOMERS_COLLECTION_ID } from "@/lib/appwrite";
+import { getCollection } from "@/lib/sync-manager";
+import { useNetwork } from "@/lib/network-provider";
 
 interface Customer {
   $id: string;
@@ -33,10 +35,12 @@ export default function CustomersScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
+  const { syncNow } = useNetwork();
+
   const fetchCustomers = useCallback(async () => {
     try {
-      const res = await databases.listDocuments(DATABASE_ID, CUSTOMERS_COLLECTION_ID, [Query.limit(500)]);
-      setCustomers(res.documents as unknown as Customer[]);
+      const allCustomers = getCollection(CUSTOMERS_COLLECTION_ID);
+      setCustomers(allCustomers as unknown as Customer[]);
     } catch {
       setCustomers([]);
     } finally {
@@ -52,9 +56,10 @@ export default function CustomersScreen() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
+    await syncNow();
     await fetchCustomers();
     setRefreshing(false);
-  }, [fetchCustomers]);
+  }, [fetchCustomers, syncNow]);
 
   const filteredCustomers = customers.filter((c) => {
     const matchesSearch = !search || c.name.toLowerCase().includes(search.toLowerCase()) || c.phone.includes(search);

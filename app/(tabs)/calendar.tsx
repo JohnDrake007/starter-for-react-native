@@ -3,7 +3,9 @@ import { useState, useCallback } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useFocusEffect } from "expo-router";
 import { Bell, Calendar, Sprout, ChevronLeft, ChevronRight, ChevronDown, X } from "@/components/Icons";
-import { databases, Query, DATABASE_ID, VISITS_COLLECTION_ID, CUSTOMERS_COLLECTION_ID } from "@/lib/appwrite";
+import { VISITS_COLLECTION_ID, CUSTOMERS_COLLECTION_ID } from "@/lib/appwrite";
+import { getCollection } from "@/lib/sync-manager";
+import { useNetwork } from "@/lib/network-provider";
 
 interface CustomerMap {
   [key: string]: { name: string; cropType?: string };
@@ -33,23 +35,24 @@ export default function CalendarScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
+  const { syncNow } = useNetwork();
+
   const loadData = useCallback(async () => {
     try {
-      const [visitsRes, customersRes] = await Promise.all([
-        databases.listDocuments(DATABASE_ID, VISITS_COLLECTION_ID, [Query.limit(100)]),
-        databases.listDocuments(DATABASE_ID, CUSTOMERS_COLLECTION_ID, [Query.limit(100)]),
-      ]);
+      const visitsRes = getCollection(VISITS_COLLECTION_ID);
+      const customersRes = getCollection(CUSTOMERS_COLLECTION_ID);
+
       const customerMap: CustomerMap = {};
-      (customersRes.documents as any[]).forEach((c) => {
+      customersRes.forEach((c) => {
         customerMap[c.$id] = { name: c.name, cropType: c.cropType };
       });
       const dates = new Set<string>();
-      (visitsRes.documents as any[]).forEach((d) => {
+      visitsRes.forEach((d) => {
         if (d.visitDate) dates.add(new Date(d.visitDate).toISOString().split("T")[0]);
         if (d.nextVisitDate) dates.add(new Date(d.nextVisitDate).toISOString().split("T")[0]);
       });
       setVisitDates(dates);
-      const reminderDocs = (visitsRes.documents as any[]).filter((d) => d.nextVisitDate);
+      const reminderDocs = visitsRes.filter((d) => d.nextVisitDate);
       setReminders(
         reminderDocs.map((d) => {
           const customer = customerMap[d.customerId] || { name: "Unknown", cropType: undefined };
@@ -79,9 +82,10 @@ export default function CalendarScreen() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
+    await syncNow();
     await loadData();
     setRefreshing(false);
-  }, [loadData]);
+  }, [loadData, syncNow]);
 
   const dayLabels = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
   const year = currentMonth.getFullYear();

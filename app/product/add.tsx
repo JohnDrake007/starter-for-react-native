@@ -3,7 +3,8 @@ import { useState } from "react";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArrowLeft, Plus, Tag, Beaker, Hash } from "@/components/Icons";
-import { databases, DATABASE_ID, ITEMS_COLLECTION_ID, ID } from "@/lib/appwrite";
+import { ITEMS_COLLECTION_ID } from "@/lib/appwrite";
+import { createDocument } from "@/lib/sync-manager";
 
 const categories = ["Fertilizer", "Insecticide", "Fungicide", "Herbicide", "PGR", "Organic", "Micronutrient", "Other"];
 const units = ["kg", "g", "L", "ml", "packet", "bottle", "bag", "tablet", "piece"];
@@ -24,7 +25,7 @@ export default function AddProductScreen() {
     }
     setSaving(true);
     try {
-      await databases.createDocument(DATABASE_ID, ITEMS_COLLECTION_ID, ID.unique(), {
+      await createDocument(ITEMS_COLLECTION_ID, {
         name: name.trim(),
         category: category || null,
         unit: unit || null,
@@ -132,7 +133,7 @@ export default function AddProductScreen() {
 const styles = StyleSheet.create({
   outerContainer: { flex: 1, backgroundColor: "#fafafa" },
   header: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingBottom: 12, backgroundColor: "#fff", borderBottomWidth: 1, borderBottomColor: "#e5e7eb" },
-  headerBack: { padding: 4 },
+  headerBack: { width: 44, height: 44, justifyContent: "center", alignItems: "center", marginLeft: -8 },
   headerTitle: { flex: 1, textAlign: "center", fontSize: 16, fontWeight: "600", color: "#1a1a2e" },
   scrollView: { flex: 1 },
   fieldGroup: { gap: 8 },

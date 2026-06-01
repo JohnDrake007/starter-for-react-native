@@ -3,7 +3,9 @@ import { useState, useCallback } from "react";
 import { useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArrowLeft, Search, Package, Tag, Beaker, Share2, Plus, X } from "@/components/Icons";
-import { databases, Query, DATABASE_ID, ITEMS_COLLECTION_ID } from "@/lib/appwrite";
+import { ITEMS_COLLECTION_ID } from "@/lib/appwrite";
+import { getCollection } from "@/lib/sync-manager";
+import { useNetwork } from "@/lib/network-provider";
 
 interface Item {
   $id: string;
@@ -49,11 +51,14 @@ export default function ProductCatalogScreen() {
   const [selectedCategory, setSelectedCategory] = useState("All");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const { syncNow } = useNetwork();
 
   const fetchItems = useCallback(async () => {
     try {
-      const res = await databases.listDocuments(DATABASE_ID, ITEMS_COLLECTION_ID, [Query.limit(500), Query.orderDesc("$createdAt")]);
-      setItems((res.documents as any[]).map((d) => ({
+      const allItems = getCollection(ITEMS_COLLECTION_ID).sort((a, b) => 
+        new Date(b.$createdAt).getTime() - new Date(a.$createdAt).getTime()
+      );
+      setItems(allItems.map((d) => ({
         $id: d.$id,
         name: d.name,
         category: d.category || undefined,
@@ -68,9 +73,10 @@ export default function ProductCatalogScreen() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
+    await syncNow();
     await fetchItems();
     setRefreshing(false);
-  }, [fetchItems]);
+  }, [fetchItems, syncNow]);
 
   const filteredItems = items.filter((item) => {
     if (selectedCategory !== "All" && item.category !== selectedCategory) return false;
@@ -243,7 +249,7 @@ export default function ProductCatalogScreen() {
 const styles = StyleSheet.create({
   outerContainer: { flex: 1, backgroundColor: "#fafafa" },
   header: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingBottom: 12, backgroundColor: "#fff", borderBottomWidth: 1, borderBottomColor: "#e5e7eb" },
-  headerBack: { padding: 4 },
+  headerBack: { width: 44, height: 44, justifyContent: "center", alignItems: "center", marginLeft: -8 },
   headerCenter: { flex: 1, alignItems: "center" },
   headerTitle: { fontSize: 16, fontWeight: "600", color: "#1a1a2e" },
   headerSub: { fontSize: 11, color: "#6b7280" },

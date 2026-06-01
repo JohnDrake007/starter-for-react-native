@@ -6,7 +6,9 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
 import { ArrowLeft, Calendar, Sprout, Package, Bell, Phone, MapPin, FileText, Camera, ExternalLink, Share2, Clock, ChevronRight, Pencil, Check, X, Trash2 } from "@/components/Icons";
-import { databases, storage, Query, ID, DATABASE_ID, VISITS_COLLECTION_ID, CUSTOMERS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, VISIT_PHOTOS_COLLECTION_ID, ITEMS_COLLECTION_ID, STORAGE_BUCKET_ID } from "@/lib/appwrite";
+import { CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, VISIT_PHOTOS_COLLECTION_ID, ITEMS_COLLECTION_ID, STORAGE_BUCKET_ID } from "@/lib/appwrite";
+import { getCollection, getDocument, updateDocument, enqueuePhotoUpload } from "@/lib/sync-manager";
+import { useNetwork } from "@/lib/network-provider";
 
 interface Customer {
   name: string;
@@ -41,6 +43,7 @@ export default function VisitDetailScreen() {
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const { syncNow } = useNetwork();
   const [visitData, setVisitData] = useState<any>(null);
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
@@ -65,24 +68,23 @@ export default function VisitDetailScreen() {
   const loadData = useCallback(async () => {
     if (!id) return;
     try {
-      const visitDoc = await databases.getDocument(DATABASE_ID, VISITS_COLLECTION_ID, id);
+      const visitDoc = getDocument(VISITS_COLLECTION_ID, id);
       setVisitData(visitDoc);
 
       let customerData: Customer = { name: "Unknown", phone: "" };
-      if (visitDoc.customerId) {
+      if (visitDoc?.customerId) {
         try {
-          const cDoc = await databases.getDocument(DATABASE_ID, CUSTOMERS_COLLECTION_ID, visitDoc.customerId);
-          customerData = { name: cDoc.name, phone: cDoc.phone, address: cDoc.address, cropType: cDoc.cropType };
+          const cDoc = getDocument(CUSTOMERS_COLLECTION_ID, visitDoc.customerId);
+          if (cDoc) {
+            customerData = { name: cDoc.name, phone: cDoc.phone, address: cDoc.address, cropType: cDoc.cropType };
+          }
         } catch {}
       }
       setCustomer(customerData);
 
       try {
-        const recsRes = await databases.listDocuments(DATABASE_ID, RECOMMENDATIONS_COLLECTION_ID, [
-          Query.equal("visitId", id),
-          Query.limit(50),
-        ]);
-        const recs: Recommendation[] = (recsRes.documents as any[]).map((r) => ({
+        const recsRes = getCollection(RECOMMENDATIONS_COLLECTION_ID).filter(r => r.visitId === id);
+        const recs: Recommendation[] = recsRes.map((r) => ({
           $id: r.$id,
           itemId: r.itemId || undefined,
           customItem: r.customItem || undefined,
@@ -96,11 +98,9 @@ export default function VisitDetailScreen() {
         if (recs.some((r) => r.itemId)) {
           const itemIds = recs.filter((r) => r.itemId).map((r) => r.itemId!);
           try {
-            const itemsRes = await databases.listDocuments(DATABASE_ID, ITEMS_COLLECTION_ID, [
-              Query.limit(100),
-            ]);
+            const itemsRes = getCollection(ITEMS_COLLECTION_ID);
             const itemMap: Record<string, { name: string; category?: string; unit?: string }> = {};
-            (itemsRes.documents as any[]).forEach((item) => {
+            itemsRes.forEach((item) => {
               itemMap[item.$id] = { name: item.name, category: item.category, unit: item.unit };
             });
             recs.forEach((r) => {
@@ -118,12 +118,9 @@ export default function VisitDetailScreen() {
       }
 
       try {
-        const photosRes = await databases.listDocuments(DATABASE_ID, VISIT_PHOTOS_COLLECTION_ID, [
-          Query.equal("visitId", id),
-          Query.limit(20),
-        ]);
+        const photosRes = getCollection(VISIT_PHOTOS_COLLECTION_ID).filter(p => p.visitId === id);
         setPhotos(
-          (photosRes.documents as any[]).map((p) => ({
+          photosRes.map((p) => ({
             $id: p.$id,
             url: p.url,
             caption: p.caption || undefined,
@@ -147,9 +144,10 @@ export default function VisitDetailScreen() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
+    await syncNow();
     await loadData();
     setRefreshing(false);
-  }, [loadData]);
+  }, [loadData, syncNow]);
 
   const startEditing = () => {
     if (!visitData) return;
@@ -251,7 +249,7 @@ export default function VisitDetailScreen() {
       if (editLocationName !== (visitData.locationName || "")) updateData.locationName = editLocationName || undefined;
 
       if (Object.keys(updateData).length > 0) {
-        await databases.updateDocument(DATABASE_ID, VISITS_COLLECTION_ID, id, updateData);
+        await updateDocument(VISITS_COLLECTION_ID, id, updateData);
       }
 
       for (const photo of newPhotos) {
@@ -260,15 +258,17 @@ export default function VisitDetailScreen() {
           const mimeType = photo.type || (fileExt === "png" ? "image/png" : "image/jpeg");
           const fileName = photo.name || `visit_${id}_${Date.now()}.${fileExt}`;
           const fileSize = photo.size || 1024;
-          const uploaded = await storage.createFile(STORAGE_BUCKET_ID, ID.unique(), {
-            name: fileName, type: mimeType, size: fileSize, uri: photo.uri,
-          });
-          const fileUrl = storage.getFileView(STORAGE_BUCKET_ID, uploaded.$id).toString();
-          await databases.createDocument(DATABASE_ID, VISIT_PHOTOS_COLLECTION_ID, ID.unique(), {
-            visitId: id, url: fileUrl, caption: undefined,
+          
+          await enqueuePhotoUpload({
+            localUri: photo.uri,
+            fileName,
+            mimeType,
+            fileSize,
+            bucketId: STORAGE_BUCKET_ID,
+            visitId: id,
           });
         } catch (photoErr) {
-          console.warn("Failed to upload photo:", photoErr);
+          console.warn("Failed to queue photo:", photoErr);
         }
       }
 
@@ -764,7 +764,7 @@ export default function VisitDetailScreen() {
 const styles = StyleSheet.create({
   outerContainer: { flex: 1, backgroundColor: "#fafafa" },
   header: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingBottom: 12, backgroundColor: "#fff", borderBottomWidth: 1, borderBottomColor: "#e5e7eb" },
-  headerBack: { padding: 4 },
+  headerBack: { width: 44, height: 44, justifyContent: "center", alignItems: "center", marginLeft: -8 },
   headerCenter: { flex: 1, alignItems: "center" },
   headerTitle: { fontSize: 16, fontWeight: "600", color: "#1a1a2e" },
   headerSub: { fontSize: 11, color: "#6b7280" },

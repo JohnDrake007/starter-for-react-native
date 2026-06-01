@@ -3,7 +3,10 @@ import { useState, useCallback } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useFocusEffect } from "expo-router";
 import { Bell, Users, ClipboardList, Sprout, PlusCircle, UserPlus, MapPin, ArrowRight, ClipboardCheck } from "@/components/Icons";
-import { databases, Query, DATABASE_ID, CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID } from "@/lib/appwrite";
+import { CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID } from "@/lib/appwrite";
+import { getCollection } from "@/lib/sync-manager";
+import { useNetwork } from "@/lib/network-provider";
+import SyncStatusIcon from "@/components/SyncStatusIcon";
 
 interface VisitWithCustomer {
   $id: string;
@@ -35,20 +38,22 @@ export default function HomeScreen() {
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { syncNow } = useNetwork();
 
   const loadData = useCallback(async () => {
     try {
       setError(null);
-      const [customersRes, visitsRes] = await Promise.all([
-        databases.listDocuments(DATABASE_ID, CUSTOMERS_COLLECTION_ID, [Query.limit(100)]),
-        databases.listDocuments(DATABASE_ID, VISITS_COLLECTION_ID, [Query.limit(100), Query.orderDesc("$createdAt")]),
-      ]);
+      const allCustomers = getCollection(CUSTOMERS_COLLECTION_ID);
+      const allVisits = getCollection(VISITS_COLLECTION_ID).sort((a, b) => 
+        new Date(b.$createdAt).getTime() - new Date(a.$createdAt).getTime()
+      );
+
       const customerMap: Record<string, { name: string; cropType?: string }> = {};
-      (customersRes.documents as any[]).forEach((c) => {
+      allCustomers.forEach((c) => {
         customerMap[c.$id] = { name: c.name, cropType: c.cropType };
       });
 
-      const reminderDocs = (visitsRes.documents as any[]).filter((d) => d.nextVisitDate);
+      const reminderDocs = allVisits.filter((d) => d.nextVisitDate);
       const remindersList: Reminder[] = reminderDocs.map((d) => {
         const customer = customerMap[d.customerId] || { name: "Unknown", cropType: undefined };
         const daysUntil = Math.ceil((new Date(d.nextVisitDate).getTime() - Date.now()) / (1000 * 3600 * 24));
@@ -64,18 +69,18 @@ export default function HomeScreen() {
       }).sort((a, b) => a.daysUntil - b.daysUntil);
 
       setStats({
-        totalCustomers: customersRes.total,
-        totalVisits: visitsRes.total,
+        totalCustomers: allCustomers.length,
+        totalVisits: allVisits.length,
         upcomingReminders: remindersList.length,
       });
       setReminders(remindersList);
 
       let recsByVisit: Record<string, string[]> = {};
       try {
-        const allVisitIds = (visitsRes.documents as any[]).slice(0, 5).map((d) => d.$id);
+        const allVisitIds = allVisits.slice(0, 5).map((d) => d.$id);
         if (allVisitIds.length > 0) {
-          const recsRes = await databases.listDocuments(DATABASE_ID, RECOMMENDATIONS_COLLECTION_ID, [Query.limit(100)]);
-          (recsRes.documents as any[]).forEach((r) => {
+          const allRecs = getCollection(RECOMMENDATIONS_COLLECTION_ID);
+          allRecs.forEach((r) => {
             if (allVisitIds.includes(r.visitId)) {
               if (!recsByVisit[r.visitId]) recsByVisit[r.visitId] = [];
               recsByVisit[r.visitId].push(r.customItem || r.itemId || "Item");
@@ -84,7 +89,7 @@ export default function HomeScreen() {
         }
       } catch {}
 
-      const visitsList: VisitWithCustomer[] = (visitsRes.documents as any[]).slice(0, 5).map((d) => {
+      const visitsList: VisitWithCustomer[] = allVisits.slice(0, 5).map((d) => {
         const customer = customerMap[d.customerId] || { name: "Unknown", cropType: undefined };
         return {
           $id: d.$id,
@@ -100,7 +105,7 @@ export default function HomeScreen() {
       });
       setRecentVisits(visitsList);
     } catch (e: any) {
-      setError("Could not connect to Appwrite. Check console for details.");
+      setError("Failed to load local data.");
     }
   }, []);
 
@@ -112,9 +117,10 @@ export default function HomeScreen() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
+    await syncNow();
     await loadData();
     setRefreshing(false);
-  }, [loadData]);
+  }, [loadData, syncNow]);
 
   const formatReminderDate = (dateStr: string) => {
     const date = new Date(dateStr);
@@ -143,6 +149,7 @@ export default function HomeScreen() {
             </Text>
           </View>
           <View style={styles.badge}>
+            <SyncStatusIcon size={14} />
             <Sprout color="#16a34a" size={14} />
             <Text style={styles.badgeText}>Field Agent</Text>
           </View>

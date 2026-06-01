@@ -3,7 +3,9 @@ import { useState, useCallback } from "react";
 import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Search, Calendar, Package, Sprout, MapPin, ArrowLeft, Filter, X, ChevronLeft, ChevronRight } from "@/components/Icons";
-import { databases, Query, DATABASE_ID, CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID } from "@/lib/appwrite";
+import { CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID } from "@/lib/appwrite";
+import { getCollection } from "@/lib/sync-manager";
+import { useNetwork } from "@/lib/network-provider";
 
 interface VisitItem {
   $id: string;
@@ -37,31 +39,34 @@ export default function AllVisitsScreen() {
   const [dateTo, setDateTo] = useState("");
   const [calMonth, setCalMonth] = useState(new Date());
 
+  const { syncNow } = useNetwork();
+
   const loadData = useCallback(async () => {
     try {
-      const customersRes = await databases.listDocuments(DATABASE_ID, CUSTOMERS_COLLECTION_ID, [Query.limit(500)]);
+      const customersRes = getCollection(CUSTOMERS_COLLECTION_ID);
       const cMap: Record<string, { name: string; cropType?: string }> = {};
-      (customersRes.documents as any[]).forEach((c) => {
+      customersRes.forEach((c) => {
         cMap[c.$id] = { name: c.name, cropType: c.cropType };
       });
       setCustomers(cMap);
 
-      const queries: any[] = [Query.limit(100), Query.orderDesc("$createdAt")];
+      let visitsRes = getCollection(VISITS_COLLECTION_ID).sort((a, b) => 
+        new Date(b.$createdAt).getTime() - new Date(a.$createdAt).getTime()
+      );
       if (selectedCustomerId) {
-        queries.push(Query.equal("customerId", selectedCustomerId));
+        visitsRes = visitsRes.filter(v => v.customerId === selectedCustomerId);
       }
-      const visitsRes = await databases.listDocuments(DATABASE_ID, VISITS_COLLECTION_ID, queries);
 
       let allRecNames: Record<string, string[]> = {};
       try {
-        const recsRes = await databases.listDocuments(DATABASE_ID, RECOMMENDATIONS_COLLECTION_ID, [Query.limit(500)]);
-        (recsRes.documents as any[]).forEach((r) => {
+        const recsRes = getCollection(RECOMMENDATIONS_COLLECTION_ID);
+        recsRes.forEach((r) => {
           if (!allRecNames[r.visitId]) allRecNames[r.visitId] = [];
           allRecNames[r.visitId].push(r.customItem || r.itemId || "Item");
         });
       } catch {}
 
-      const visitItems: VisitItem[] = (visitsRes.documents as any[]).map((v) => {
+      const visitItems: VisitItem[] = visitsRes.map((v) => {
         const c = cMap[v.customerId] || { name: "Unknown", cropType: undefined };
         return {
           $id: v.$id,
@@ -92,9 +97,10 @@ export default function AllVisitsScreen() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
+    await syncNow();
     await loadData();
     setRefreshing(false);
-  }, [loadData]);
+  }, [loadData, syncNow]);
 
   const filteredVisits = visits.filter((v) => {
     if (selectedCustomerId && v.customerId !== selectedCustomerId) return false;
@@ -401,7 +407,7 @@ export default function AllVisitsScreen() {
 const styles = StyleSheet.create({
   outerContainer: { flex: 1, backgroundColor: "#fafafa" },
   header: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingBottom: 12, backgroundColor: "#fff", borderBottomWidth: 1, borderBottomColor: "#e5e7eb" },
-  headerBack: { padding: 4 },
+  headerBack: { width: 44, height: 44, justifyContent: "center", alignItems: "center", marginLeft: -8 },
   headerCenter: { flex: 1, alignItems: "center" },
   headerTitle: { fontSize: 16, fontWeight: "600", color: "#1a1a2e" },
   headerSub: { fontSize: 11, color: "#6b7280" },

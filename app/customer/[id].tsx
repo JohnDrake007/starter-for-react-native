@@ -3,7 +3,9 @@ import { useState, useCallback } from "react";
 import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArrowLeft, Phone, MapPin, Sprout, Calendar, Package, Share2, Pencil, Check, X, PlusCircle, ExternalLink, Eye, Camera, ArrowRight } from "@/components/Icons";
-import { databases, Query, DATABASE_ID, CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, ITEMS_COLLECTION_ID } from "@/lib/appwrite";
+import { CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, ITEMS_COLLECTION_ID } from "@/lib/appwrite";
+import { getCollection, getDocument, updateDocument } from "@/lib/sync-manager";
+import { useNetwork } from "@/lib/network-provider";
 
 interface VisitItem {
   $id: string;
@@ -24,6 +26,7 @@ export default function CustomerDetailScreen() {
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const { syncNow } = useNetwork();
   const [customer, setCustomer] = useState<any>(null);
   const [visits, setVisits] = useState<VisitItem[]>([]);
 
@@ -61,41 +64,34 @@ export default function CustomerDetailScreen() {
   const loadData = useCallback(async () => {
     if (!id) return;
     try {
-      const cDoc = await databases.getDocument(DATABASE_ID, CUSTOMERS_COLLECTION_ID, id);
+      const cDoc = getDocument(CUSTOMERS_COLLECTION_ID, id);
       setCustomer(cDoc);
 
-      const visitsRes = await databases.listDocuments(DATABASE_ID, VISITS_COLLECTION_ID, [
-        Query.equal("customerId", id),
-        Query.orderDesc("$createdAt"),
-        Query.limit(50),
-      ]);
+      let visitsRes = getCollection(VISITS_COLLECTION_ID).sort((a, b) => 
+        new Date(b.$createdAt).getTime() - new Date(a.$createdAt).getTime()
+      );
+      visitsRes = visitsRes.filter(v => v.customerId === id).slice(0, 50);
 
       let allItemNames: Record<string, { name: string; category?: string }> = {};
       try {
-        const itemsRes = await databases.listDocuments(DATABASE_ID, ITEMS_COLLECTION_ID, [Query.limit(200)]);
-        (itemsRes.documents as any[]).forEach((item) => { allItemNames[item.$id] = { name: item.name, category: item.category }; });
+        const itemsRes = getCollection(ITEMS_COLLECTION_ID);
+        itemsRes.forEach((item) => { allItemNames[item.$id] = { name: item.name, category: item.category }; });
       } catch {}
 
       const visitItems: VisitItem[] = [];
-      for (const v of visitsRes.documents as any[]) {
+      for (const v of visitsRes) {
         let recommendations: VisitItem["recommendations"] = [];
         let photoCount = 0;
         try {
-          const recsRes = await databases.listDocuments(DATABASE_ID, RECOMMENDATIONS_COLLECTION_ID, [
-            Query.equal("visitId", v.$id),
-            Query.limit(50),
-          ]);
-          recommendations = (recsRes.documents as any[]).map((r: any) => ({
+          const recsRes = getCollection(RECOMMENDATIONS_COLLECTION_ID).filter(r => r.visitId === v.$id);
+          recommendations = recsRes.map((r: any) => ({
             name: r.customItem || (r.itemId && allItemNames[r.itemId]?.name) || "Unknown",
             dosage: r.dosage || undefined,
           }));
         } catch {}
         try {
-          const photosRes = await databases.listDocuments(DATABASE_ID, "visit_photos", [
-            Query.equal("visitId", v.$id),
-            Query.limit(50),
-          ]);
-          photoCount = photosRes.total;
+          const photosRes = getCollection("visit_photos").filter(p => p.visitId === v.$id);
+          photoCount = photosRes.length;
         } catch {}
 
         visitItems.push({
@@ -126,9 +122,10 @@ export default function CustomerDetailScreen() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
+    await syncNow();
     await loadData();
     setRefreshing(false);
-  }, [loadData]);
+  }, [loadData, syncNow]);
 
   const startEditing = () => {
     if (!customer) return;
@@ -148,7 +145,7 @@ export default function CustomerDetailScreen() {
       const updateData: any = { name: editName.trim(), phone: editPhone.trim() };
       updateData.address = editAddress.trim() || undefined;
       updateData.cropType = editCropType || undefined;
-      await databases.updateDocument(DATABASE_ID, CUSTOMERS_COLLECTION_ID, id, updateData);
+      await updateDocument(CUSTOMERS_COLLECTION_ID, id, updateData);
       setEditing(false);
       await loadData();
     } catch (e: any) {
@@ -447,7 +444,7 @@ export default function CustomerDetailScreen() {
 const styles = StyleSheet.create({
   outerContainer: { flex: 1, backgroundColor: "#fafafa" },
   header: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingBottom: 12, backgroundColor: "#fff", borderBottomWidth: 1, borderBottomColor: "#e5e7eb" },
-  headerBack: { padding: 4 },
+  headerBack: { width: 44, height: 44, justifyContent: "center", alignItems: "center", marginLeft: -8 },
   headerCenter: { flex: 1, alignItems: "center" },
   headerTitle: { fontSize: 16, fontWeight: "600", color: "#1a1a2e" },
   headerAction: { width: 36, height: 36, borderRadius: 18, backgroundColor: "#dcfce780", justifyContent: "center", alignItems: "center" },

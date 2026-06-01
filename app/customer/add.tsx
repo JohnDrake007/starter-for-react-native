@@ -4,7 +4,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import * as Location from "expo-location";
 import { ArrowLeft, UserPlus, Phone, MapPin, Sprout, Check } from "@/components/Icons";
-import { databases, ID, DATABASE_ID, CUSTOMERS_COLLECTION_ID } from "@/lib/appwrite";
+import { CUSTOMERS_COLLECTION_ID } from "@/lib/appwrite";
+import { createDocument } from "@/lib/sync-manager";
 
 const cropOptions = ["Cardamom", "Pepper", "Coffee", "Tea", "Rubber", "Coconut", "Rice", "Other"];
 
@@ -56,7 +57,7 @@ export default function AddCustomerScreen() {
     if (!phone.trim()) { Alert.alert("Required", "Please enter the phone number"); return; }
     setSubmitting(true);
     try {
-      await databases.createDocument(DATABASE_ID, CUSTOMERS_COLLECTION_ID, ID.unique(), {
+      await createDocument(CUSTOMERS_COLLECTION_ID, {
         name: name.trim(),
         phone: phone.trim(),
         address: address.trim() || undefined,
@@ -179,7 +180,7 @@ export default function AddCustomerScreen() {
 const s = StyleSheet.create({
   outerContainer: { flex: 1, backgroundColor: "#fafafa" },
   header: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingBottom: 12, backgroundColor: "#fff", borderBottomWidth: 1, borderBottomColor: "#e5e7eb" },
-  headerBack: { padding: 4 },
+  headerBack: { width: 44, height: 44, justifyContent: "center", alignItems: "center", marginLeft: -8 },
   headerCenter: { flex: 1, alignItems: "center" },
   headerTitle: { fontSize: 16, fontWeight: "600", color: "#1a1a2e" },
   scrollView: { flex: 1 },

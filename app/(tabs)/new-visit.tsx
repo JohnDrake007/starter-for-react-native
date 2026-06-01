@@ -5,8 +5,9 @@ import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
-import { Search, MapPin, PlusCircle, Check, Package, Sprout, Calendar, ChevronRight, ChevronLeft, Camera, X, Trash2, Clock } from "@/components/Icons";
-import { databases, storage, Query, ID, DATABASE_ID, CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, ITEMS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, VISIT_PHOTOS_COLLECTION_ID, STORAGE_BUCKET_ID } from "@/lib/appwrite";
+import { Search, MapPin, PlusCircle, Check, Package, Sprout, Calendar, ChevronRight, ChevronLeft, Camera, X, Trash2, Clock, ArrowLeft } from "@/components/Icons";
+import { CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, ITEMS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, VISIT_PHOTOS_COLLECTION_ID, STORAGE_BUCKET_ID } from "@/lib/appwrite";
+import { getCollection, createDocument, enqueuePhotoUpload } from "@/lib/sync-manager";
 
 interface Customer {
   $id: string;
@@ -82,12 +83,15 @@ export default function NewVisitScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      databases.listDocuments(DATABASE_ID, CUSTOMERS_COLLECTION_ID, [Query.limit(500)])
-        .then((res) => setCustomers(res.documents as unknown as Customer[]))
-        .catch(() => setCustomers([]));
-      databases.listDocuments(DATABASE_ID, ITEMS_COLLECTION_ID, [Query.limit(500)])
-        .then((res) => setItems(res.documents as unknown as Item[]))
-        .catch(() => setItems([]));
+      try {
+        const c = getCollection(CUSTOMERS_COLLECTION_ID);
+        setCustomers(c as Customer[]);
+      } catch {}
+      
+      try {
+        const i = getCollection(ITEMS_COLLECTION_ID);
+        setItems(i as Item[]);
+      } catch {}
     }, [])
   );
 
@@ -214,12 +218,12 @@ export default function NewVisitScreen() {
         nextVisitDate: nextVisitDate ? new Date(nextVisitDate).toISOString() : undefined,
         nextVisitTask: nextVisitTask || undefined,
       };
-      const visitDoc = await databases.createDocument(DATABASE_ID, VISITS_COLLECTION_ID, ID.unique(), visitData);
+      const visitDoc = await createDocument(VISITS_COLLECTION_ID, visitData);
       const visitId = visitDoc.$id;
 
       for (const rec of recommendations) {
         try {
-          await databases.createDocument(DATABASE_ID, RECOMMENDATIONS_COLLECTION_ID, ID.unique(), {
+          await createDocument(RECOMMENDATIONS_COLLECTION_ID, {
             visitId,
             itemId: rec.isCustom ? undefined : rec.itemId,
             customItem: rec.isCustom ? rec.customItem : undefined,
@@ -239,17 +243,14 @@ export default function NewVisitScreen() {
           const fileName = photo.name || `visit_${visitId}_${Date.now()}.${fileExt}`;
           const fileSize = photo.size || 1024;
           
-          const uploaded = await storage.createFile(STORAGE_BUCKET_ID, ID.unique(), {
-            name: fileName,
-            type: mimeType,
-            size: fileSize,
-            uri: photo.uri,
-          });
-          const fileUrl = storage.getFileView(STORAGE_BUCKET_ID, uploaded.$id).toString();
-          await databases.createDocument(DATABASE_ID, VISIT_PHOTOS_COLLECTION_ID, ID.unique(), {
+          await enqueuePhotoUpload({
+            localUri: photo.uri,
+            fileName,
+            mimeType,
+            fileSize,
+            bucketId: STORAGE_BUCKET_ID,
             visitId: visitId,
-            url: fileUrl,
-            caption: photo.caption || undefined,
+            caption: photo.caption,
           });
         } catch (photoErr) {
           console.warn("Failed to upload photo:", photoErr);
@@ -575,7 +576,9 @@ export default function NewVisitScreen() {
     <View style={s.outerContainer}>
       <View style={[s.stickyHeader, { paddingTop: insets.top + 12 }]}>
         <View style={s.headerRow}>
-          <View style={{ width: 40 }} />
+          <TouchableOpacity style={{ width: 40, height: 40, justifyContent: "center", alignItems: "center" }} onPress={() => router.back()}>
+            <ArrowLeft color="#1a1a2e" size={22} />
+          </TouchableOpacity>
           <Text style={s.headerTitle}>New Visit</Text>
           <View style={{ width: 40 }} />
         </View>
