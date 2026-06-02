@@ -1,12 +1,14 @@
 import { Client, Databases, ID, Permission, Role } from "react-native-appwrite";
 
+const PROJECT_ID = process.env.APPWRITE_PROJECT_ID || "";
+const ENDPOINT = process.env.APPWRITE_ENDPOINT || "https://sgp.cloud.appwrite.io/v1";
+const DATABASE_ID = process.env.APPWRITE_DATABASE_ID || "6a1c0a8a0029a3ca0c82";
+
 const client = new Client()
-  .setProject("6a1bf181002ff774402d")
-  .setEndpoint("https://sgp.cloud.appwrite.io/v1");
+  .setProject(PROJECT_ID)
+  .setEndpoint(ENDPOINT);
 
 const databases = new Databases(client);
-
-const DATABASE_ID = "field-agent";
 
 async function setup() {
   console.log("Creating database...");
@@ -23,7 +25,6 @@ async function setup() {
 
   console.log("\nCreating collections...");
 
-  // --- Customers ---
   console.log("Creating customers collection...");
   try {
     await databases.createCollection(DATABASE_ID, "customers", "Customers", [
@@ -60,7 +61,6 @@ async function setup() {
     }
   }
 
-  // --- Items ---
   console.log("\nCreating items collection...");
   try {
     await databases.createCollection(DATABASE_ID, "items", "Items", [
@@ -91,7 +91,6 @@ async function setup() {
     }
   }
 
-  // --- Visits ---
   console.log("\nCreating visits collection...");
   try {
     await databases.createCollection(DATABASE_ID, "visits", "Visits", [
@@ -132,7 +131,6 @@ async function setup() {
     }
   }
 
-  // --- Visit Recommendations ---
   console.log("\nCreating recommendations collection...");
   try {
     await databases.createCollection(DATABASE_ID, "recommendations", "Recommendations", [
@@ -165,7 +163,6 @@ async function setup() {
     }
   }
 
-  // --- Visit Photos ---
   console.log("\nCreating visit_photos collection...");
   try {
     await databases.createCollection(DATABASE_ID, "visit_photos", "Visit Photos", [

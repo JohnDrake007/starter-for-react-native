@@ -47,6 +47,13 @@
     ],
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "27ac1bd6-b42f-445c-aa19-bda65fd66230"
+      }
+    },
+    "owner": "roshan-paul"
   }
 }

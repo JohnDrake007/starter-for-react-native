@@ -1,33 +1,5 @@
-const PROJECT_ID = "6a1bf181002ff774402d";
-const ENDPOINT = "https://sgp.cloud.appwrite.io/v1";
-const API_KEY = "standard_115bd37902061debdcc3117f5241878b58d56e6dabfaf0c055400313212b0314424d7362cc38cbe8dc0e26b6c3a53e1677e77bb9927cb7e52d5d3e1ae87ac63b7ed6ec04d219390159f30c00c539e1689669c1269a31bc63ac2ff471005f771fd19b56f53c2f761c4264fb0f30fa230436307768f9c3a53841b2d28187a4d973";
-const DATABASE_ID = "6a1c0a8a0029a3ca0c82";
+const { DATABASE_ID, headers, api, delay } = require("./config");
 
-const headers = {
-  "Content-Type": "application/json",
-  "X-Appwrite-Project": PROJECT_ID,
-  "X-Appwrite-Key": API_KEY,
-};
-
-async function api(path, method, body) {
-  const url = ENDPOINT + path;
-  const res = await fetch(url, {
-    method: method,
-    headers: headers,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const data = await res.json();
-  if (res.ok) {
-    return data;
-  } else {
-    console.error("  ERROR " + res.status + ": " + (data.message || JSON.stringify(data)));
-    return null;
-  }
-}
-
-const delay = (ms) => new Promise((r) => setTimeout(r, ms));
-
-// Map of tallyCode -> expiryDate
 const expiryDates = {
   "FER001": "2026-07-15",
   "FER002": "2026-08-22",
@@ -71,7 +43,6 @@ const expiryDates = {
 async function addExpiryDates() {
   console.log("Adding expiry dates to existing items...\n");
 
-  // First create the expiryDate attribute on the items collection
   console.log("Creating expiryDate attribute on items collection...");
   const attrRes = await api("/databases/" + DATABASE_ID + "/collections/items/attributes/string", "POST", {
     key: "expiryDate",
@@ -85,7 +56,6 @@ async function addExpiryDates() {
   }
   await delay(5000);
 
-  // Get all items
   const itemsRes = await api("/databases/" + DATABASE_ID + "/collections/items/documents?limit=200", "GET");
   if (!itemsRes || !itemsRes.documents) {
     console.error("Failed to fetch items");
