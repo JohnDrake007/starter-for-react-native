@@ -1,5 +1,5 @@
 import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity, Alert, Image, Modal, Pressable, Linking, Platform, TextInput } from "react-native";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import DateTimePicker from "@react-native-community/datetimepicker";
@@ -64,6 +64,9 @@ export default function VisitDetailScreen() {
   const [editLocationName, setEditLocationName] = useState("");
   const [newPhotos, setNewPhotos] = useState<{ uri: string; name?: string; type?: string; size?: number }[]>([]);
   const [photoUploading, setPhotoUploading] = useState(false);
+  // Ref guards to prevent DateTimePicker double-fire on Android
+  const editVisitDatePickerHandled = useRef(false);
+  const editNextVisitDatePickerHandled = useRef(false);
 
   const loadData = useCallback(async () => {
     if (!id) return;
@@ -375,7 +378,7 @@ export default function VisitDetailScreen() {
     return (
       <View style={[styles.loadingContainer, { paddingTop: insets.top }]}>
         <Text style={styles.loadingText}>Visit not found</Text>
-        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+        <TouchableOpacity style={styles.backBtn} onPress={() => router.canGoBack() ? router.back() : router.replace("/(tabs)/home")}>
           <ArrowLeft color="#16a34a" size={18} />
           <Text style={styles.backBtnText}>Go Home</Text>
         </TouchableOpacity>
@@ -404,7 +407,7 @@ export default function VisitDetailScreen() {
   return (
     <View style={styles.outerContainer}>
       <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
-        <TouchableOpacity style={styles.headerBack} onPress={() => router.back()}>
+        <TouchableOpacity style={styles.headerBack} onPress={() => router.canGoBack() ? router.back() : router.replace("/(tabs)/home")}>
           <ArrowLeft color="#1a1a2e" size={22} />
         </TouchableOpacity>
         <View style={styles.headerCenter}>
@@ -476,7 +479,7 @@ export default function VisitDetailScreen() {
           <>
             <View style={styles.card}>
               <Text style={styles.editLabel}>Visit Date</Text>
-              <TouchableOpacity style={styles.dateInputRow} onPress={() => setShowEditVisitDatePicker(true)}>
+              <TouchableOpacity style={styles.dateInputRow} onPress={() => { editVisitDatePickerHandled.current = false; setShowEditVisitDatePicker(true); }}>
                 <Calendar color="#9ca3af" size={16} />
                 <Text style={[styles.editInput, { flex: 1, marginLeft: 8 }, editVisitDate && { color: "#1a1a2e" }]}>{editVisitDate || "Select date"}</Text>
               </TouchableOpacity>
@@ -485,10 +488,12 @@ export default function VisitDetailScreen() {
                   value={editVisitDate ? new Date(editVisitDate) : new Date()}
                   mode="date"
                   display={Platform.OS === "ios" ? "inline" : "default"}
-                  onValueChange={(_event, date) => {
+                  onChange={(_event, date) => {
+                    if (editVisitDatePickerHandled.current) return;
+                    editVisitDatePickerHandled.current = true;
+                    setShowEditVisitDatePicker(false);
                     if (date) setEditVisitDate(date.toISOString().split("T")[0]);
                   }}
-                  onDismiss={() => setShowEditVisitDatePicker(false)}
                 />
               )}
             </View>
@@ -551,7 +556,7 @@ export default function VisitDetailScreen() {
 
             <View style={styles.card}>
               <Text style={styles.editLabel}>Next Visit Date</Text>
-              <TouchableOpacity style={styles.dateInputRow} onPress={() => setShowEditNextVisitDatePicker(true)}>
+              <TouchableOpacity style={styles.dateInputRow} onPress={() => { editNextVisitDatePickerHandled.current = false; setShowEditNextVisitDatePicker(true); }}>
                 <Calendar color="#9ca3af" size={16} />
                 <Text style={[styles.editInput, { flex: 1, marginLeft: 8 }, editNextVisitDate && { color: "#1a1a2e" }]}>{editNextVisitDate || "Select date"}</Text>
               </TouchableOpacity>
@@ -560,10 +565,12 @@ export default function VisitDetailScreen() {
                   value={editNextVisitDate ? new Date(editNextVisitDate) : new Date()}
                   mode="date"
                   display={Platform.OS === "ios" ? "inline" : "default"}
-                  onValueChange={(_event, date) => {
+                  onChange={(_event, date) => {
+                    if (editNextVisitDatePickerHandled.current) return;
+                    editNextVisitDatePickerHandled.current = true;
+                    setShowEditNextVisitDatePicker(false);
                     if (date) setEditNextVisitDate(date.toISOString().split("T")[0]);
                   }}
-                  onDismiss={() => setShowEditNextVisitDatePicker(false)}
                 />
               )}
 

@@ -207,11 +207,28 @@ export async function deleteDocument(
  */
 export async function enqueuePhotoUpload(meta: PendingMutation["photoMeta"]): Promise<void> {
   if (!meta) return;
+
+  // Save a local record immediately so the photo is visible while offline
+  const localPhotoId = generateLocalId();
+  const localPhotoDoc = {
+    $id: localPhotoId,
+    visitId: meta.visitId,
+    url: meta.localUri,   // use local URI for offline display
+    caption: meta.caption || undefined,
+    $createdAt: new Date().toISOString(),
+    $updatedAt: new Date().toISOString(),
+    _pendingSync: true,
+    _isLocalPhoto: true,  // flag so we can replace it after sync
+  };
+  if (!cache[VISIT_PHOTOS_COLLECTION_ID]) cache[VISIT_PHOTOS_COLLECTION_ID] = [];
+  cache[VISIT_PHOTOS_COLLECTION_ID].push(localPhotoDoc);
+  await persistCollection(VISIT_PHOTOS_COLLECTION_ID);
+
   pendingQueue.push({
     id: generateLocalId(),
     action: "create",
     collectionId: VISIT_PHOTOS_COLLECTION_ID,
-    docId: generateLocalId(),
+    docId: localPhotoId,
     timestamp: Date.now(),
     photoMeta: meta,
   });

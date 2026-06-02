@@ -1,10 +1,11 @@
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator } from "react-native";
-import { useState } from "react";
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Platform } from "react-native";
+import { useState, useRef } from "react";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ArrowLeft, Plus, Tag, Beaker, Hash, Calendar } from "@/components/Icons";
+import { ArrowLeft, Plus, Hash, Calendar, X } from "@/components/Icons";
 import { ITEMS_COLLECTION_ID } from "@/lib/appwrite";
 import { createDocument } from "@/lib/sync-manager";
+import DateTimePicker from "@react-native-community/datetimepicker";
 
 const categories = ["Fertilizer", "Insecticide", "Fungicide", "Herbicide", "PGR", "Organic", "Micronutrient", "Other"];
 const units = ["kg", "g", "L", "ml", "packet", "bottle", "bag", "tablet", "piece"];
@@ -17,7 +18,10 @@ export default function AddProductScreen() {
   const [unit, setUnit] = useState("");
   const [tallyCode, setTallyCode] = useState("");
   const [expiryDate, setExpiryDate] = useState("");
+  const [showDatePicker, setShowDatePicker] = useState(false);
   const [saving, setSaving] = useState(false);
+  // Guard against Android DateTimePicker double-fire
+  const datePickerHandled = useRef(false);
 
   const handleSave = async () => {
     if (!name.trim()) {
@@ -39,6 +43,27 @@ export default function AddProductScreen() {
     } finally {
       setSaving(false);
     }
+  };
+
+  const openDatePicker = () => {
+    datePickerHandled.current = false;
+    setShowDatePicker(true);
+  };
+
+  const onDateChange = (_event: any, date?: Date) => {
+    if (datePickerHandled.current) return;
+    datePickerHandled.current = true;
+    setShowDatePicker(false);
+    if (date) {
+      setExpiryDate(date.toISOString().split("T")[0]);
+    }
+  };
+
+  const formatDisplayDate = (d: string) => {
+    if (!d) return "";
+    try {
+      return new Date(d).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+    } catch { return d; }
   };
 
   return (
@@ -110,18 +135,28 @@ export default function AddProductScreen() {
             />
           </View>
         </View>
-      <View style={styles.fieldGroup}>
+
+        <View style={styles.fieldGroup}>
           <Text style={styles.label}>Expiry Date</Text>
-          <View style={styles.inputRow}>
-            <Calendar color="#9ca3af" size={16} />
-            <TextInput
-              style={styles.input}
-              placeholder="YYYY-MM-DD"
-              placeholderTextColor="#9ca3af"
-              value={expiryDate}
-              onChangeText={setExpiryDate}
+          <TouchableOpacity style={styles.inputRow} onPress={openDatePicker}>
+            <Calendar color={expiryDate ? "#16a34a" : "#9ca3af"} size={16} />
+            <Text style={[styles.input, { flex: 1 }, expiryDate ? styles.dateSelected : styles.datePlaceholder]}>
+              {expiryDate ? formatDisplayDate(expiryDate) : "Select expiry date"}
+            </Text>
+            {expiryDate ? (
+              <TouchableOpacity onPress={() => setExpiryDate("")} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <X color="#9ca3af" size={14} />
+              </TouchableOpacity>
+            ) : null}
+          </TouchableOpacity>
+          {showDatePicker && (
+            <DateTimePicker
+              value={expiryDate ? new Date(expiryDate) : new Date()}
+              mode="date"
+              display={Platform.OS === "ios" ? "inline" : "default"}
+              onChange={onDateChange}
             />
-          </View>
+          )}
         </View>
       </ScrollView>
 
@@ -155,6 +190,8 @@ const styles = StyleSheet.create({
   label: { fontSize: 13, fontWeight: "600", color: "#374151" },
   inputRow: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "#fff", borderRadius: 14, paddingHorizontal: 14, height: 48, borderWidth: 1, borderColor: "#e5e7eb" },
   input: { flex: 1, fontSize: 14, color: "#1a1a2e" },
+  dateSelected: { color: "#1a1a2e" },
+  datePlaceholder: { color: "#9ca3af" },
   chipRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   chip: { paddingVertical: 7, paddingHorizontal: 14, borderRadius: 20, backgroundColor: "#f3f4f6", borderWidth: 1, borderColor: "transparent" },
   chipActive: { backgroundColor: "#ecfdf5", borderColor: "#16a34a40" },

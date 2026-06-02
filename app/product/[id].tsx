@@ -1,8 +1,9 @@
-import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity, Alert, Linking, TextInput } from "react-native";
-import { useState, useCallback } from "react";
+import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity, Alert, Linking, TextInput, Platform } from "react-native";
+import { useState, useCallback, useRef } from "react";
 import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArrowLeft, Package, Tag, Beaker, Hash, Calendar, Clock, Pencil, Check, X, Share2 } from "@/components/Icons";
+import DateTimePicker from "@react-native-community/datetimepicker";
 import { ITEMS_COLLECTION_ID } from "@/lib/appwrite";
 import { getDocument, updateDocument } from "@/lib/sync-manager";
 import { useNetwork } from "@/lib/network-provider";
@@ -53,6 +54,8 @@ export default function ProductDetailScreen() {
   const [editUnit, setEditUnit] = useState("");
   const [editTallyCode, setEditTallyCode] = useState("");
   const [editExpiryDate, setEditExpiryDate] = useState("");
+  const [showExpiryDatePicker, setShowExpiryDatePicker] = useState(false);
+  const expiryDatePickerHandled = useRef(false);
 
   const loadData = useCallback(async () => {
     if (!id) return;
@@ -89,7 +92,24 @@ export default function ProductDetailScreen() {
     setEditing(true);
   };
 
-  const cancelEditing = () => setEditing(false);
+  const cancelEditing = () => {
+    setEditing(false);
+    setShowExpiryDatePicker(false);
+  };
+
+  const openExpiryDatePicker = () => {
+    expiryDatePickerHandled.current = false;
+    setShowExpiryDatePicker(true);
+  };
+
+  const onExpiryDateChange = (_event: any, date?: Date) => {
+    if (expiryDatePickerHandled.current) return;
+    expiryDatePickerHandled.current = true;
+    setShowExpiryDatePicker(false);
+    if (date) {
+      setEditExpiryDate(date.toISOString().split("T")[0]);
+    }
+  };
 
   const saveEdits = async () => {
     if (!editName.trim()) { Alert.alert("Error", "Product name is required"); return; }
@@ -231,10 +251,27 @@ export default function ProductDetailScreen() {
 
             <View style={styles.card}>
               <Text style={styles.label}>Expiry Date</Text>
-              <View style={styles.inputRow}>
-                <Calendar color="#9ca3af" size={16} />
-                <TextInput style={styles.input} value={editExpiryDate} onChangeText={setEditExpiryDate} placeholder="YYYY-MM-DD" placeholderTextColor="#9ca3af" />
-              </View>
+              <TouchableOpacity style={styles.inputRow} onPress={openExpiryDatePicker}>
+                <Calendar color={editExpiryDate ? "#16a34a" : "#9ca3af"} size={16} />
+                <Text style={[styles.input, { flex: 1 }, editExpiryDate ? { color: "#1a1a2e" } : { color: "#9ca3af" }]}>
+                  {editExpiryDate
+                    ? new Date(editExpiryDate).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })
+                    : "Select expiry date"}
+                </Text>
+                {editExpiryDate ? (
+                  <TouchableOpacity onPress={() => setEditExpiryDate("")} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                    <X color="#9ca3af" size={14} />
+                  </TouchableOpacity>
+                ) : null}
+              </TouchableOpacity>
+              {showExpiryDatePicker && (
+                <DateTimePicker
+                  value={editExpiryDate ? new Date(editExpiryDate) : new Date()}
+                  mode="date"
+                  display={Platform.OS === "ios" ? "inline" : "default"}
+                  onChange={onExpiryDateChange}
+                />
+              )}
               {editExpiryDate ? (
                 <View style={[styles.expiryBadge, isExpired && styles.expiryBadgeExpired, isUrgent && styles.expiryBadgeUrgent]}>
                   <Clock color={isExpired ? "#dc2626" : isUrgent ? "#f59e0b" : "#16a34a"} size={12} />

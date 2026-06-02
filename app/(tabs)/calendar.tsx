@@ -46,10 +46,18 @@ export default function CalendarScreen() {
       customersRes.forEach((c) => {
         customerMap[c.$id] = { name: c.name, cropType: c.cropType };
       });
+      const toLocalDateStr = (dateStr: string) => {
+        const d = new Date(dateStr);
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, "0");
+        const day = String(d.getDate()).padStart(2, "0");
+        return `${y}-${m}-${day}`;
+      };
+
       const dates = new Set<string>();
       visitsRes.forEach((d) => {
-        if (d.visitDate) dates.add(new Date(d.visitDate).toISOString().split("T")[0]);
-        if (d.nextVisitDate) dates.add(new Date(d.nextVisitDate).toISOString().split("T")[0]);
+        if (d.visitDate) dates.add(toLocalDateStr(d.visitDate));
+        if (d.nextVisitDate) dates.add(toLocalDateStr(d.nextVisitDate));
       });
       setVisitDates(dates);
       const reminderDocs = visitsRes.filter((d) => d.nextVisitDate);
@@ -95,32 +103,37 @@ export default function CalendarScreen() {
   const prevMonthDays = new Date(year, month, 0).getDate();
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const todayStr = today.toISOString().split("T")[0];
+  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
 
   const calendarDays: { date: number; isCurrentMonth: boolean; isToday: boolean; isMarked: boolean; isSelected: boolean; fullDate: string }[] = [];
   for (let i = firstDay - 1; i >= 0; i--) {
     const d = prevMonthDays - i;
     const dt = new Date(year, month - 1, d);
-    const fd = dt.toISOString().split("T")[0];
+    const fd = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
     calendarDays.push({ date: d, isCurrentMonth: false, isToday: false, isMarked: visitDates.has(fd), isSelected: fd === selectedDate, fullDate: fd });
   }
   for (let d = 1; d <= daysInMonth; d++) {
     const dt = new Date(year, month, d);
-    const fd = dt.toISOString().split("T")[0];
+    const fd = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
     calendarDays.push({ date: d, isCurrentMonth: true, isToday: fd === todayStr, isMarked: visitDates.has(fd), isSelected: fd === selectedDate, fullDate: fd });
   }
   const remaining = 42 - calendarDays.length;
   for (let d = 1; d <= remaining; d++) {
     const dt = new Date(year, month + 1, d);
-    const fd = dt.toISOString().split("T")[0];
+    const fd = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
     calendarDays.push({ date: d, isCurrentMonth: false, isToday: false, isMarked: visitDates.has(fd), isSelected: fd === selectedDate, fullDate: fd });
   }
 
+  const toLocalDateStr = (dateStr: string) => {
+    const d = new Date(dateStr);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  };
+
   const filteredReminders = selectedDate
-    ? reminders.filter((r) => {
-        const rd = new Date(r.nextVisitDate).toISOString().split("T")[0];
-        return rd === selectedDate;
-      })
+    ? reminders.filter((r) => toLocalDateStr(r.nextVisitDate) === selectedDate)
     : reminders;
 
   const formatDate = (dateStr: string) => new Date(dateStr).toLocaleDateString("en-IN", { day: "numeric", month: "short" });

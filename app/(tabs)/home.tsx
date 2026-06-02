@@ -3,7 +3,7 @@ import { useState, useCallback } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useFocusEffect } from "expo-router";
 import { Bell, Users, ClipboardList, Sprout, PlusCircle, UserPlus, MapPin, ArrowRight, ClipboardCheck } from "@/components/Icons";
-import { CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID } from "@/lib/appwrite";
+import { CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, ITEMS_COLLECTION_ID } from "@/lib/appwrite";
 import { getCollection } from "@/lib/sync-manager";
 import { useNetwork } from "@/lib/network-provider";
 import SyncStatusIcon from "@/components/SyncStatusIcon";
@@ -80,10 +80,15 @@ export default function HomeScreen() {
         const allVisitIds = allVisits.slice(0, 5).map((d) => d.$id);
         if (allVisitIds.length > 0) {
           const allRecs = getCollection(RECOMMENDATIONS_COLLECTION_ID);
+          const allItems = getCollection(ITEMS_COLLECTION_ID);
+          const itemNameMap: Record<string, string> = {};
+          allItems.forEach((item: any) => { itemNameMap[item.$id] = item.name; });
+
           allRecs.forEach((r) => {
             if (allVisitIds.includes(r.visitId)) {
               if (!recsByVisit[r.visitId]) recsByVisit[r.visitId] = [];
-              recsByVisit[r.visitId].push(r.customItem || r.itemId || "Item");
+              const name = r.customItem || (r.itemId ? (itemNameMap[r.itemId] || r.itemId) : "Item");
+              recsByVisit[r.visitId].push(name);
             }
           });
         }

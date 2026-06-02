@@ -1,5 +1,5 @@
 import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Alert, Image, Platform } from "react-native";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
 import DateTimePicker from "@react-native-community/datetimepicker";
@@ -80,6 +80,9 @@ export default function NewVisitScreen() {
   const [nextVisitDate, setNextVisitDate] = useState("");
   const [showNextVisitDatePicker, setShowNextVisitDatePicker] = useState(false);
   const [nextVisitTask, setNextVisitTask] = useState("");
+  // Ref guards to prevent DateTimePicker double-fire on Android
+  const visitDatePickerHandled = useRef(false);
+  const nextVisitDatePickerHandled = useRef(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -257,12 +260,13 @@ export default function NewVisitScreen() {
         }
       }
 
-      Alert.alert("Success", "Visit created successfully!", [
+      Alert.alert("Visit Saved", "Visit created successfully!", [
         { text: "OK", onPress: () => {
           setCurrentStep(1); setSelectedCustomerId(""); setSelectedCustomerName(""); setObservations("");
           setRecommendations([]); setNextVisitDate(""); setNextVisitTask("");
           setLatitude(null); setLongitude(null); setLocationName(""); setPhotos([]);
-          router.replace(`/visit/${visitId}`);
+          router.dismissTo("/(tabs)/home");
+          router.push(`/visit/${visitId}`);
         }},
       ]);
     } catch (e: any) {
@@ -335,7 +339,7 @@ export default function NewVisitScreen() {
       <Text style={s.stepTitle}>Visit Details</Text>
 
       <Text style={s.label}>Visit Date</Text>
-      <TouchableOpacity style={s.dateInputRow} onPress={() => setShowVisitDatePicker(true)}>
+      <TouchableOpacity style={s.dateInputRow} onPress={() => { visitDatePickerHandled.current = false; setShowVisitDatePicker(true); }}>
         <Calendar color="#9ca3af" size={16} />
         <Text style={[s.input, { flex: 1, marginLeft: 8 }, visitDate && { color: "#1a1a2e" }]}>{visitDate || "Select date"}</Text>
       </TouchableOpacity>
@@ -344,10 +348,12 @@ export default function NewVisitScreen() {
           value={visitDate ? new Date(visitDate) : new Date()}
           mode="date"
           display={Platform.OS === "ios" ? "inline" : "default"}
-          onValueChange={(_event, date) => {
+          onChange={(_event, date) => {
+            if (visitDatePickerHandled.current) return;
+            visitDatePickerHandled.current = true;
+            setShowVisitDatePicker(false);
             if (date) setVisitDate(date.toISOString().split("T")[0]);
           }}
-          onDismiss={() => setShowVisitDatePicker(false)}
         />
       )}
 
@@ -497,7 +503,7 @@ export default function NewVisitScreen() {
       <Text style={s.stepTitle}>Schedule Follow-up</Text>
 
       <Text style={s.label}>Next Visit Date</Text>
-      <TouchableOpacity style={s.dateInputRow} onPress={() => setShowNextVisitDatePicker(true)}>
+      <TouchableOpacity style={s.dateInputRow} onPress={() => { nextVisitDatePickerHandled.current = false; setShowNextVisitDatePicker(true); }}>
         <Calendar color="#9ca3af" size={16} />
         <Text style={[s.input, { flex: 1, marginLeft: 8 }, nextVisitDate && { color: "#1a1a2e" }]}>{nextVisitDate || "Select date"}</Text>
       </TouchableOpacity>
@@ -506,10 +512,12 @@ export default function NewVisitScreen() {
           value={nextVisitDate ? new Date(nextVisitDate) : new Date()}
           mode="date"
           display={Platform.OS === "ios" ? "inline" : "default"}
-          onValueChange={(_event, date) => {
+          onChange={(_event, date) => {
+            if (nextVisitDatePickerHandled.current) return;
+            nextVisitDatePickerHandled.current = true;
+            setShowNextVisitDatePicker(false);
             if (date) setNextVisitDate(date.toISOString().split("T")[0]);
           }}
-          onDismiss={() => setShowNextVisitDatePicker(false)}
         />
       )}
 

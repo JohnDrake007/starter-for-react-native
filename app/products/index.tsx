@@ -156,6 +156,7 @@ export default function ProductCatalogScreen() {
             )}
             {item.expiryDate && (() => {
               const daysUntil = Math.ceil((new Date(item.expiryDate).getTime() - Date.now()) / (1000 * 3600 * 24));
+              if (isNaN(daysUntil)) return null;
               const isExpired = daysUntil < 0;
               const isUrgent = daysUntil >= 0 && daysUntil <= 30;
               return (
@@ -209,21 +210,23 @@ export default function ProductCatalogScreen() {
         </View>
       </View>
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.categoryScrollView} contentContainerStyle={styles.categoryList}>
-        {categories.map((cat) => {
-          const isActive = selectedCategory === cat;
-          return (
-            <TouchableOpacity
-              key={cat}
-              style={[styles.categoryPill, isActive && styles.categoryPillActive]}
-              onPress={() => setSelectedCategory(cat)}
-            >
-              {cat !== "All" && <Text style={styles.categoryIcon}>{getCategoryIcon(cat)}</Text>}
-              <Text style={[styles.categoryPillText, isActive && styles.categoryPillTextActive]}>{cat}</Text>
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
+      <View style={styles.categoryScrollWrapper}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.categoryScrollView} contentContainerStyle={styles.categoryList}>
+          {categories.map((cat) => {
+            const isActive = selectedCategory === cat;
+            return (
+              <TouchableOpacity
+                key={cat}
+                style={[styles.categoryPill, isActive && styles.categoryPillActive]}
+                onPress={() => setSelectedCategory(cat)}
+              >
+                {cat !== "All" && <Text style={styles.categoryIcon}>{getCategoryIcon(cat)}</Text>}
+                <Text style={[styles.categoryPillText, isActive && styles.categoryPillTextActive]}>{cat}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+      </View>
 
       <View style={styles.expiryFilterContainer}>
         <View style={styles.expiryFilterHeader}>
@@ -295,7 +298,8 @@ const styles = StyleSheet.create({
   searchContainer: { paddingHorizontal: 16, paddingVertical: 12, backgroundColor: "#fff", borderBottomWidth: 1, borderBottomColor: "#e5e7eb" },
   searchBox: { flexDirection: "row", alignItems: "center", backgroundColor: "#f3f4f6", borderRadius: 14, paddingHorizontal: 12, height: 44 },
   searchInput: { flex: 1, marginLeft: 8, fontSize: 14, color: "#1a1a2e" },
-  categoryScrollView: { backgroundColor: "#fff", borderBottomWidth: 1, borderBottomColor: "#e5e7eb" },
+  categoryScrollWrapper: { height: 48, backgroundColor: "#fff", borderBottomWidth: 1, borderBottomColor: "#e5e7eb" },
+  categoryScrollView: { flex: 1 },
   categoryList: { paddingHorizontal: 16, paddingVertical: 8, gap: 6, alignItems: "center" },
   categoryPill: { flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 7, paddingHorizontal: 12, borderRadius: 20, backgroundColor: "#f3f4f6", borderWidth: 1, borderColor: "transparent" },
   categoryPillActive: { backgroundColor: "#16a34a", borderColor: "#16a34a" },
