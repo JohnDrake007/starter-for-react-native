@@ -96,11 +96,6 @@ export default function MoreScreen() {
             <Text style={styles.aboutLabel}>Version</Text>
             <Text style={styles.aboutValue}>1.0.0</Text>
           </View>
-          <View style={styles.aboutRow}>
-            <Database color="#9ca3af" size={14} />
-            <Text style={styles.aboutLabel}>Backend</Text>
-            <Text style={styles.aboutValue}>Appwrite</Text>
-          </View>
         </View>
       </View>
 
