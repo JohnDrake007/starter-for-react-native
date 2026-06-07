@@ -5,9 +5,9 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
-import { ArrowLeft, Calendar, Sprout, Package, Bell, Phone, MapPin, FileText, Camera, ExternalLink, Share2, Clock, ChevronRight, Pencil, Check, X, Trash2 } from "@/components/Icons";
+import { ArrowLeft, Calendar, Sprout, Package, Bell, Phone, MapPin, FileText, Camera, ExternalLink, Share2, Clock, ChevronRight, Pencil, Check, X, Trash2, PlusCircle, Search } from "@/components/Icons";
 import { CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, VISIT_PHOTOS_COLLECTION_ID, ITEMS_COLLECTION_ID, STORAGE_BUCKET_ID } from "@/lib/appwrite";
-import { getCollection, getDocument, updateDocument, enqueuePhotoUpload } from "@/lib/sync-manager";
+import { getCollection, getDocument, updateDocument, createDocument, deleteDocument, enqueuePhotoUpload } from "@/lib/sync-manager";
 import { useNetwork } from "@/lib/network-provider";
 
 interface Customer {
@@ -28,12 +28,21 @@ interface Recommendation {
   isCustom: boolean;
   category?: string;
   unit?: string;
+  _deleted?: boolean;
 }
 
 interface Photo {
   $id: string;
   url: string;
   caption?: string;
+  _isLocal?: boolean;
+}
+
+interface Item {
+  $id: string;
+  name: string;
+  category?: string;
+  unit?: string;
 }
 
 export default function VisitDetailScreen() {
@@ -49,9 +58,12 @@ export default function VisitDetailScreen() {
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
+  const [allItems, setAllItems] = useState<Item[]>([]);
 
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  // Basic edit fields
   const [editObservations, setEditObservations] = useState("");
   const [editNextVisitDate, setEditNextVisitDate] = useState("");
   const [editNextVisitTask, setEditNextVisitTask] = useState("");
@@ -62,11 +74,24 @@ export default function VisitDetailScreen() {
   const [editLatitude, setEditLatitude] = useState<number | null>(null);
   const [editLongitude, setEditLongitude] = useState<number | null>(null);
   const [editLocationName, setEditLocationName] = useState("");
+
+  // Photo editing state
   const [newPhotos, setNewPhotos] = useState<{ uri: string; name?: string; type?: string; size?: number }[]>([]);
-  const [photoUploading, setPhotoUploading] = useState(false);
+  const [deletedPhotoIds, setDeletedPhotoIds] = useState<string[]>([]);
+
+  // Recommendations editing state
+  const [editRecs, setEditRecs] = useState<Recommendation[]>([]);
+  const [deletedRecIds, setDeletedRecIds] = useState<string[]>([]);
+  const [itemSearch, setItemSearch] = useState("");
+  const [showCustomItem, setShowCustomItem] = useState(false);
+  const [customItemName, setCustomItemName] = useState("");
+  const [showItemSearch, setShowItemSearch] = useState(false);
+
   // Ref guards to prevent DateTimePicker double-fire on Android
   const editVisitDatePickerHandled = useRef(false);
   const editNextVisitDatePickerHandled = useRef(false);
+
+  const [showShareMenu, setShowShareMenu] = useState(false);
 
   const loadData = useCallback(async () => {
     if (!id) return;
@@ -85,6 +110,12 @@ export default function VisitDetailScreen() {
       }
       setCustomer(customerData);
 
+      // Load items catalog
+      try {
+        const itemsRes = getCollection(ITEMS_COLLECTION_ID);
+        setAllItems(itemsRes as Item[]);
+      } catch {}
+
       try {
         const recsRes = getCollection(RECOMMENDATIONS_COLLECTION_ID).filter(r => r.visitId === id);
         const recs: Recommendation[] = recsRes.map((r) => ({
@@ -99,7 +130,6 @@ export default function VisitDetailScreen() {
         }));
 
         if (recs.some((r) => r.itemId)) {
-          const itemIds = recs.filter((r) => r.itemId).map((r) => r.itemId!);
           try {
             const itemsRes = getCollection(ITEMS_COLLECTION_ID);
             const itemMap: Record<string, { name: string; category?: string; unit?: string }> = {};
@@ -127,6 +157,7 @@ export default function VisitDetailScreen() {
             $id: p.$id,
             url: p.url,
             caption: p.caption || undefined,
+            _isLocal: p._isLocalPhoto,
           }))
         );
       } catch {
@@ -162,11 +193,20 @@ export default function VisitDetailScreen() {
     setEditLongitude(visitData.longitude || null);
     setEditLocationName(visitData.locationName || "");
     setNewPhotos([]);
+    setDeletedPhotoIds([]);
+    setEditRecs([...recommendations]);
+    setDeletedRecIds([]);
+    setItemSearch("");
+    setShowCustomItem(false);
+    setCustomItemName("");
+    setShowItemSearch(false);
     setEditing(true);
   };
 
   const cancelEditing = () => {
     setEditing(false);
+    setDeletedPhotoIds([]);
+    setDeletedRecIds([]);
   };
 
   const captureGPS = async () => {
@@ -234,10 +274,78 @@ export default function VisitDetailScreen() {
 
   const removeNewPhoto = (idx: number) => setNewPhotos(newPhotos.filter((_, i) => i !== idx));
 
+  const markPhotoDeleted = (photoId: string) => {
+    setDeletedPhotoIds((prev) => [...prev, photoId]);
+  };
+
+  // ── Recommendation editing helpers ──────────────────────────────────────────
+  const filteredItems = itemSearch
+    ? allItems.filter(
+        (i) =>
+          i.name.toLowerCase().includes(itemSearch.toLowerCase()) ||
+          (i.category && i.category.toLowerCase().includes(itemSearch.toLowerCase()))
+      )
+    : [];
+
+  const addItemToRecs = (item: Item) => {
+    if (editRecs.find((r) => r.itemId === item.$id && !r._deleted)) return;
+    setEditRecs((prev) => [
+      ...prev,
+      {
+        $id: `new_${Date.now()}_${Math.random()}`,
+        itemId: item.$id,
+        name: item.name,
+        category: item.category,
+        unit: item.unit,
+        dosage: "",
+        quantity: "",
+        notes: "",
+        isCustom: false,
+      },
+    ]);
+    setItemSearch("");
+    setShowItemSearch(false);
+  };
+
+  const addCustomRec = () => {
+    if (!customItemName.trim()) return;
+    setEditRecs((prev) => [
+      ...prev,
+      {
+        $id: `new_${Date.now()}_${Math.random()}`,
+        customItem: customItemName.trim(),
+        name: customItemName.trim(),
+        dosage: "",
+        quantity: "",
+        notes: "",
+        isCustom: true,
+      },
+    ]);
+    setCustomItemName("");
+    setShowCustomItem(false);
+  };
+
+  const removeEditRec = (idx: number) => {
+    const rec = editRecs[idx];
+    // If it's an existing record (not newly added), mark for deletion
+    if (!rec.$id.startsWith("new_")) {
+      setDeletedRecIds((prev) => [...prev, rec.$id]);
+    }
+    setEditRecs((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const updateEditRec = (idx: number, field: string, value: string) => {
+    const updated = [...editRecs];
+    updated[idx] = { ...updated[idx], [field]: value };
+    setEditRecs(updated);
+  };
+
+  // ── Save ─────────────────────────────────────────────────────────────────────
   const saveEdits = async () => {
     if (!visitData) return;
     setSaving(true);
     try {
+      // 1. Update visit fields
       const updateData: any = {};
       if (editObservations !== (visitData.observations || "")) updateData.observations = editObservations || undefined;
       if (editVisitDate && editVisitDate !== (visitData.visitDate || "").split("T")[0]) updateData.visitDate = new Date(editVisitDate).toISOString();
@@ -255,13 +363,22 @@ export default function VisitDetailScreen() {
         await updateDocument(VISITS_COLLECTION_ID, id, updateData);
       }
 
+      // 2. Handle deleted photos
+      for (const photoId of deletedPhotoIds) {
+        try {
+          await deleteDocument(VISIT_PHOTOS_COLLECTION_ID, photoId);
+        } catch (e) {
+          console.warn("Failed to delete photo:", e);
+        }
+      }
+
+      // 3. Upload new photos
       for (const photo of newPhotos) {
         try {
           const fileExt = photo.uri.split(".").pop() || "jpg";
           const mimeType = photo.type || (fileExt === "png" ? "image/png" : "image/jpeg");
           const fileName = photo.name || `visit_${id}_${Date.now()}.${fileExt}`;
           const fileSize = photo.size || 1024;
-          
           await enqueuePhotoUpload({
             localUri: photo.uri,
             fileName,
@@ -275,7 +392,53 @@ export default function VisitDetailScreen() {
         }
       }
 
+      // 4. Handle deleted recommendations
+      for (const recId of deletedRecIds) {
+        try {
+          await deleteDocument(RECOMMENDATIONS_COLLECTION_ID, recId);
+        } catch (e) {
+          console.warn("Failed to delete recommendation:", e);
+        }
+      }
+
+      // 5. Update existing recommendations & create new ones
+      for (const rec of editRecs) {
+        if (rec.$id.startsWith("new_")) {
+          // New recommendation — create it
+          try {
+            await createDocument(RECOMMENDATIONS_COLLECTION_ID, {
+              visitId: id,
+              itemId: rec.isCustom ? undefined : rec.itemId,
+              customItem: rec.isCustom ? rec.customItem : undefined,
+              dosage: rec.dosage || undefined,
+              quantity: rec.quantity || undefined,
+              notes: rec.notes || undefined,
+            });
+          } catch (e) {
+            console.warn("Failed to create recommendation:", e);
+          }
+        } else {
+          // Existing recommendation — check if dosage/quantity/notes changed
+          const original = recommendations.find((r) => r.$id === rec.$id);
+          if (original) {
+            const changed: any = {};
+            if (rec.dosage !== original.dosage) changed.dosage = rec.dosage || undefined;
+            if (rec.quantity !== original.quantity) changed.quantity = rec.quantity || undefined;
+            if (rec.notes !== original.notes) changed.notes = rec.notes || undefined;
+            if (Object.keys(changed).length > 0) {
+              try {
+                await updateDocument(RECOMMENDATIONS_COLLECTION_ID, rec.$id, changed);
+              } catch (e) {
+                console.warn("Failed to update recommendation:", e);
+              }
+            }
+          }
+        }
+      }
+
       setNewPhotos([]);
+      setDeletedPhotoIds([]);
+      setDeletedRecIds([]);
       setEditing(false);
       await loadData();
     } catch (e: any) {
@@ -364,8 +527,6 @@ export default function VisitDetailScreen() {
     Linking.openURL(whatsappUrl).catch(() => Linking.openURL(`https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`));
   };
 
-  const [showShareMenu, setShowShareMenu] = useState(false);
-
   if (loading) {
     return (
       <View style={[styles.loadingContainer, { paddingTop: insets.top }]}>
@@ -404,6 +565,11 @@ export default function VisitDetailScreen() {
     ? Math.ceil(((editing ? new Date(editNextVisitDate!) : new Date(visitData.nextVisitDate!)).getTime() - Date.now()) / (1000 * 3600 * 24))
     : null;
 
+  // Visible photos in edit mode (exclude deleted ones)
+  const visiblePhotos = editing
+    ? photos.filter((p) => !deletedPhotoIds.includes(p.$id))
+    : photos;
+
   return (
     <View style={styles.outerContainer}>
       <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
@@ -411,7 +577,7 @@ export default function VisitDetailScreen() {
           <ArrowLeft color="#1a1a2e" size={22} />
         </TouchableOpacity>
         <View style={styles.headerCenter}>
-          <Text style={styles.headerTitle}>Visit Details</Text>
+          <Text style={styles.headerTitle}>{editing ? "Edit Visit" : "Visit Details"}</Text>
           <Text style={styles.headerSub}>{formatDate(editing ? (editVisitDate || visitData.visitDate) : visitData.visitDate)}</Text>
         </View>
         {editing ? (
@@ -452,7 +618,9 @@ export default function VisitDetailScreen() {
         style={styles.scrollView}
         contentContainerStyle={{ paddingBottom: insets.bottom + 40, padding: 16, gap: 12 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={["#16a34a"]} />}
+        keyboardShouldPersistTaps="handled"
       >
+        {/* Customer Card */}
         <View style={styles.customerCard}>
           <View style={styles.customerAvatar}>
             <Sprout color="#16a34a" size={20} />
@@ -475,8 +643,10 @@ export default function VisitDetailScreen() {
           <ChevronRight color="#9ca3af" size={18} />
         </View>
 
+        {/* ── EDIT MODE ─────────────────────────────────────────────────── */}
         {editing ? (
           <>
+            {/* Visit Date */}
             <View style={styles.card}>
               <Text style={styles.editLabel}>Visit Date</Text>
               <TouchableOpacity style={styles.dateInputRow} onPress={() => { editVisitDatePickerHandled.current = false; setShowEditVisitDatePicker(true); }}>
@@ -498,6 +668,7 @@ export default function VisitDetailScreen() {
               )}
             </View>
 
+            {/* GPS */}
             <View style={styles.card}>
               <Text style={styles.editLabel}>GPS Location</Text>
               <TouchableOpacity style={styles.gpsButton} onPress={captureGPS} disabled={capturingGPS}>
@@ -508,22 +679,20 @@ export default function VisitDetailScreen() {
               </TouchableOpacity>
             </View>
 
+            {/* Observations */}
             <View style={styles.card}>
               <Text style={styles.editLabel}>Observations</Text>
               <TextInput
                 style={[styles.editInput, styles.editTextArea]}
                 value={editObservations}
                 onChangeText={(text) => {
-                  // Auto-numbering: when user types a newline, prepend next number
                   const lines = text.split("\n");
                   const prevLines = editObservations.split("\n");
                   if (lines.length > prevLines.length) {
-                    // A new line was added
                     const newLastLine = lines[lines.length - 1];
-                    // Check if previous lines have numbering pattern
                     const prevNonEmpty = lines.slice(0, -1).filter(l => l.trim());
                     const lastNonEmpty = prevNonEmpty[prevNonEmpty.length - 1] || "";
-                    const numMatch = lastNonEmpty.match(/^(\d+)[\.\)\s]/);
+                    const numMatch = lastNonEmpty.match(/^(\d+)[\.)\s]/);
                     if (numMatch && newLastLine === "") {
                       const nextNum = parseInt(numMatch[1]) + 1;
                       const updated = [...lines.slice(0, -1), `${nextNum}. `];
@@ -542,22 +711,33 @@ export default function VisitDetailScreen() {
               <Text style={styles.obsHint}>Tip: Type "1. " to start auto-numbering. Press Enter to continue.</Text>
             </View>
 
+            {/* ── Photos (Edit Mode) ──────────────────────────────────────── */}
             <View style={styles.card}>
               <View style={styles.cardHeader}>
                 <View style={[styles.cardIconSmall, { backgroundColor: "#fecdd3" }]}>
                   <Camera color="#e11d48" size={14} />
                 </View>
-                <Text style={styles.cardTitle}>Photos</Text>
+                <Text style={styles.cardTitle}>
+                  Photos ({visiblePhotos.length + newPhotos.length})
+                </Text>
               </View>
               <View style={styles.photosGrid}>
-                {photos.map((photo) => (
-                  <TouchableOpacity key={photo.$id} style={styles.photoThumb} onPress={() => setSelectedPhoto(photo.url)}>
+                {/* Existing photos with delete button */}
+                {visiblePhotos.map((photo) => (
+                  <View key={photo.$id} style={styles.photoThumbContainer}>
                     <Image source={{ uri: photo.url }} style={styles.photoImage} />
-                  </TouchableOpacity>
+                    <TouchableOpacity style={styles.photoRemove} onPress={() => markPhotoDeleted(photo.$id)}>
+                      <Trash2 color="#fff" size={10} />
+                    </TouchableOpacity>
+                  </View>
                 ))}
+                {/* New photos to upload */}
                 {newPhotos.map((photo, idx) => (
                   <View key={`new-${idx}`} style={styles.photoThumbContainer}>
                     <Image source={{ uri: photo.uri }} style={styles.photoImage} />
+                    <View style={styles.photoPendingBadge}>
+                      <Text style={styles.photoPendingText}>NEW</Text>
+                    </View>
                     <TouchableOpacity style={styles.photoRemove} onPress={() => removeNewPhoto(idx)}>
                       <X color="#fff" size={10} />
                     </TouchableOpacity>
@@ -574,11 +754,153 @@ export default function VisitDetailScreen() {
               </View>
             </View>
 
+            {/* ── Recommended Products (Edit Mode) ────────────────────────── */}
             <View style={styles.card}>
+              <View style={styles.cardHeader}>
+                <View style={[styles.cardIconSmall, { backgroundColor: "#dcfce7" }]}>
+                  <Package color="#16a34a" size={14} />
+                </View>
+                <Text style={styles.cardTitle}>Recommended Products ({editRecs.length})</Text>
+              </View>
+
+              {/* Product search */}
+              {showItemSearch ? (
+                <View style={{ gap: 8 }}>
+                  <View style={styles.searchBox}>
+                    <Search color="#9ca3af" size={14} />
+                    <TextInput
+                      style={styles.searchInput}
+                      placeholder="Search products..."
+                      placeholderTextColor="#9ca3af"
+                      value={itemSearch}
+                      onChangeText={setItemSearch}
+                      autoFocus
+                    />
+                    <TouchableOpacity onPress={() => { setShowItemSearch(false); setItemSearch(""); }}>
+                      <X color="#9ca3af" size={14} />
+                    </TouchableOpacity>
+                  </View>
+                  {itemSearch.length > 0 && filteredItems.map((item) => (
+                    <TouchableOpacity key={item.$id} style={styles.itemRow} onPress={() => addItemToRecs(item)}>
+                      <Package color="#16a34a" size={14} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.itemName}>{item.name}</Text>
+                        {item.category && <Text style={styles.itemCategory}>{item.category}{item.unit ? ` · ${item.unit}` : ""}</Text>}
+                      </View>
+                      <PlusCircle color="#16a34a" size={16} />
+                    </TouchableOpacity>
+                  ))}
+                  {itemSearch.length > 0 && filteredItems.length === 0 && (
+                    <Text style={styles.emptyText}>No products found</Text>
+                  )}
+                </View>
+              ) : null}
+
+              {/* Custom item input */}
+              {showCustomItem ? (
+                <View style={styles.customItemRow}>
+                  <TextInput
+                    style={[styles.editInput, { flex: 1 }]}
+                    placeholder="Enter custom product name"
+                    placeholderTextColor="#9ca3af"
+                    value={customItemName}
+                    onChangeText={setCustomItemName}
+                  />
+                  <TouchableOpacity style={styles.customAddBtn} onPress={addCustomRec}>
+                    <Text style={styles.customAddBtnText}>Add</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.customCancelBtn} onPress={() => { setShowCustomItem(false); setCustomItemName(""); }}>
+                    <X color="#6b7280" size={16} />
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+
+              {/* Add buttons */}
+              {!showItemSearch && !showCustomItem && (
+                <View style={styles.addRecRow}>
+                  <TouchableOpacity style={styles.addRecBtn} onPress={() => setShowItemSearch(true)}>
+                    <Search color="#16a34a" size={14} />
+                    <Text style={styles.addRecBtnText}>Search Products</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.addRecBtn} onPress={() => setShowCustomItem(true)}>
+                    <PlusCircle color="#16a34a" size={14} />
+                    <Text style={styles.addRecBtnText}>Custom Item</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              {/* Editable rec list */}
+              {editRecs.length === 0 ? (
+                <Text style={styles.emptyText}>No products added yet</Text>
+              ) : (
+                editRecs.map((rec, idx) => (
+                  <View key={rec.$id} style={[styles.editRecCard, idx < editRecs.length - 1 && styles.editRecCardBorder]}>
+                    <View style={styles.editRecHeader}>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flex: 1 }}>
+                        <View style={[styles.recIcon, { backgroundColor: "#dcfce7" }]}>
+                          <Package color="#16a34a" size={12} />
+                        </View>
+                        <Text style={styles.recName} numberOfLines={1}>{rec.name}</Text>
+                        {rec.isCustom && <View style={styles.customBadge}><Text style={styles.customBadgeText}>Custom</Text></View>}
+                        {rec.$id.startsWith("new_") && <View style={styles.newBadge}><Text style={styles.newBadgeText}>NEW</Text></View>}
+                      </View>
+                      <TouchableOpacity onPress={() => removeEditRec(idx)} style={styles.recDeleteBtn}>
+                        <Trash2 color="#dc2626" size={14} />
+                      </TouchableOpacity>
+                    </View>
+                    {rec.category && <Text style={styles.recCategory}>{rec.category}</Text>}
+                    <View style={styles.recEditFields}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.fieldLabel}>Dosage</Text>
+                        <TextInput
+                          style={styles.fieldInput}
+                          placeholder={rec.unit ? `e.g. 5 ${rec.unit}/L` : "e.g. 2ml/L"}
+                          placeholderTextColor="#9ca3af"
+                          value={rec.dosage}
+                          onChangeText={(t) => updateEditRec(idx, "dosage", t)}
+                        />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.fieldLabel}>Quantity</Text>
+                        <TextInput
+                          style={styles.fieldInput}
+                          placeholder="e.g. 500ml"
+                          placeholderTextColor="#9ca3af"
+                          value={rec.quantity}
+                          onChangeText={(t) => updateEditRec(idx, "quantity", t)}
+                        />
+                      </View>
+                    </View>
+                    <Text style={styles.fieldLabel}>Notes</Text>
+                    <TextInput
+                      style={styles.fieldInput}
+                      placeholder="Application instructions..."
+                      placeholderTextColor="#9ca3af"
+                      value={rec.notes}
+                      onChangeText={(t) => updateEditRec(idx, "notes", t)}
+                    />
+                  </View>
+                ))
+              )}
+            </View>
+
+            {/* Follow-up (Edit) */}
+            <View style={styles.card}>
+              <View style={styles.cardHeader}>
+                <View style={[styles.cardIconSmall, { backgroundColor: "#fef3c7" }]}>
+                  <Bell color="#b45309" size={14} />
+                </View>
+                <Text style={styles.cardTitle}>Follow-up Schedule</Text>
+              </View>
               <Text style={styles.editLabel}>Next Visit Date</Text>
               <TouchableOpacity style={styles.dateInputRow} onPress={() => { editNextVisitDatePickerHandled.current = false; setShowEditNextVisitDatePicker(true); }}>
                 <Calendar color="#9ca3af" size={16} />
                 <Text style={[styles.editInput, { flex: 1, marginLeft: 8 }, editNextVisitDate && { color: "#1a1a2e" }]}>{editNextVisitDate || "Select date"}</Text>
+                {editNextVisitDate ? (
+                  <TouchableOpacity onPress={() => setEditNextVisitDate("")}>
+                    <X color="#9ca3af" size={14} />
+                  </TouchableOpacity>
+                ) : null}
               </TouchableOpacity>
               {showEditNextVisitDatePicker && (
                 <DateTimePicker
@@ -618,9 +940,21 @@ export default function VisitDetailScreen() {
                 numberOfLines={3}
               />
             </View>
+
+            {/* Save button */}
+            <TouchableOpacity
+              style={[styles.saveButton, saving && styles.saveButtonDisabled]}
+              onPress={saveEdits}
+              disabled={saving}
+            >
+              <Check color="#fff" size={16} />
+              <Text style={styles.saveButtonText}>{saving ? "Saving..." : "Save Changes"}</Text>
+            </TouchableOpacity>
           </>
         ) : (
+          /* ── VIEW MODE ──────────────────────────────────────────────────── */
           <>
+            {/* Visit Date */}
             <View style={styles.card}>
               <View style={styles.cardRow}>
                 <View style={[styles.cardIcon, { backgroundColor: "#dcfce7" }]}>
@@ -633,6 +967,7 @@ export default function VisitDetailScreen() {
               </View>
             </View>
 
+            {/* GPS */}
             {displayLat && displayLng ? (
               <View style={styles.card}>
                 <View style={styles.cardRow}>
@@ -657,6 +992,7 @@ export default function VisitDetailScreen() {
               </View>
             ) : null}
 
+            {/* Observations */}
             {visitData.observations ? (
               <View style={styles.card}>
                 <View style={styles.cardHeader}>
@@ -671,7 +1007,8 @@ export default function VisitDetailScreen() {
           </>
         )}
 
-        {photos.length > 0 && (
+        {/* ── Photos (View Mode — always shown below edit fields) ──────── */}
+        {!editing && photos.length > 0 && (
           <View style={styles.card}>
             <View style={styles.cardHeader}>
               <View style={[styles.cardIconSmall, { backgroundColor: "#fecdd3" }]}>
@@ -694,97 +1031,67 @@ export default function VisitDetailScreen() {
           </View>
         )}
 
-        <View style={styles.card}>
-          <View style={styles.cardHeader}>
-            <View style={[styles.cardIconSmall, { backgroundColor: "#dcfce7" }]}>
-              <Package color="#16a34a" size={14} />
+        {/* ── Recommended Products (View Mode) ────────────────────────── */}
+        {!editing && (
+          <View style={styles.card}>
+            <View style={styles.cardHeader}>
+              <View style={[styles.cardIconSmall, { backgroundColor: "#dcfce7" }]}>
+                <Package color="#16a34a" size={14} />
+              </View>
+              <Text style={styles.cardTitle}>Recommended Products ({recommendations.length})</Text>
             </View>
-            <Text style={styles.cardTitle}>Recommended Products ({recommendations.length})</Text>
-          </View>
-          {editing && (
-            <View style={styles.editRecsNote}>
-              <Text style={styles.editRecsNoteText}>To add or remove recommended products, save this edit first, then create a new visit or use the customer page.</Text>
-            </View>
-          )}
-          {recommendations.length === 0 ? (
-            <Text style={styles.emptyText}>No products recommended in this visit</Text>
-          ) : (
-            recommendations.map((rec, idx) => (
-              <View key={rec.$id || idx} style={[styles.recCard, idx < recommendations.length - 1 && styles.recCardBorder]}>
-                <View style={styles.recTop}>
-                  <View style={[styles.recIcon, { backgroundColor: "#dcfce7" }]}>
-                    <Package color="#16a34a" size={14} />
-                  </View>
-                  <View style={styles.recInfo}>
-                    <View style={styles.recNameRow}>
-                      <Text style={styles.recName}>{rec.name}</Text>
-                      {rec.isCustom && <View style={styles.customBadge}><Text style={styles.customBadgeText}>Custom</Text></View>}
+            {recommendations.length === 0 ? (
+              <Text style={styles.emptyText}>No products recommended in this visit</Text>
+            ) : (
+              recommendations.map((rec, idx) => (
+                <View key={rec.$id || idx} style={[styles.recCard, idx < recommendations.length - 1 && styles.recCardBorder]}>
+                  <View style={styles.recTop}>
+                    <View style={[styles.recIcon, { backgroundColor: "#dcfce7" }]}>
+                      <Package color="#16a34a" size={14} />
                     </View>
-                    {rec.category ? (
-                      <Text style={styles.recCategory}>{rec.category}</Text>
-                    ) : null}
-                    <View style={styles.recDetails}>
-                      {rec.dosage ? (
-                        <View style={styles.recDetail}>
-                          <Text style={styles.recDetailLabel}>Dosage: </Text>
-                          <Text style={styles.recDetailValue}>{rec.dosage}</Text>
-                        </View>
-                      ) : null}
-                      {rec.quantity ? (
-                        <View style={styles.recDetail}>
-                          <Text style={styles.recDetailLabel}>Qty: </Text>
-                          <Text style={styles.recDetailValueAmber}>{rec.quantity}</Text>
-                        </View>
-                      ) : null}
-                      {rec.unit ? (
-                        <View style={styles.recDetail}>
-                          <Text style={styles.recDetailLabel}>Unit: </Text>
-                          <Text style={styles.recDetailValue}>{rec.unit}</Text>
-                        </View>
-                      ) : null}
-                    </View>
-                    {rec.notes ? (
-                      <View style={styles.recNotesCard}>
-                        <Text style={styles.recNotesText}>{rec.notes}</Text>
+                    <View style={styles.recInfo}>
+                      <View style={styles.recNameRow}>
+                        <Text style={styles.recName}>{rec.name}</Text>
+                        {rec.isCustom && <View style={styles.customBadge}><Text style={styles.customBadgeText}>Custom</Text></View>}
                       </View>
-                    ) : null}
+                      {rec.category ? (
+                        <Text style={styles.recCategory}>{rec.category}</Text>
+                      ) : null}
+                      <View style={styles.recDetails}>
+                        {rec.dosage ? (
+                          <View style={styles.recDetail}>
+                            <Text style={styles.recDetailLabel}>Dosage: </Text>
+                            <Text style={styles.recDetailValue}>{rec.dosage}</Text>
+                          </View>
+                        ) : null}
+                        {rec.quantity ? (
+                          <View style={styles.recDetail}>
+                            <Text style={styles.recDetailLabel}>Qty: </Text>
+                            <Text style={styles.recDetailValueAmber}>{rec.quantity}</Text>
+                          </View>
+                        ) : null}
+                        {rec.unit ? (
+                          <View style={styles.recDetail}>
+                            <Text style={styles.recDetailLabel}>Unit: </Text>
+                            <Text style={styles.recDetailValue}>{rec.unit}</Text>
+                          </View>
+                        ) : null}
+                      </View>
+                      {rec.notes ? (
+                        <View style={styles.recNotesCard}>
+                          <Text style={styles.recNotesText}>{rec.notes}</Text>
+                        </View>
+                      ) : null}
+                    </View>
                   </View>
                 </View>
-              </View>
-            ))
-          )}
-        </View>
-
-        {editing ? (
-          <View style={[styles.card, styles.followupCard]}>
-            <View style={styles.cardHeader}>
-              <View style={[styles.cardIconSmall, { backgroundColor: "#fef3c7" }]}>
-                <Bell color="#b45309" size={14} />
-              </View>
-              <Text style={styles.cardTitle}>Follow-up Preview</Text>
-            </View>
-            <View style={styles.followupBox}>
-              {editNextVisitDate ? (
-                <>
-                  <View style={styles.followupRow}>
-                    <Calendar color="#b45309" size={14} />
-                    <Text style={styles.followupDate}>
-                      {new Date(editNextVisitDate).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "long", year: "numeric" })}
-                    </Text>
-                  </View>
-                  {editNextVisitTask ? (
-                    <View style={styles.followupTaskSection}>
-                      <Text style={styles.followupTaskLabel}>TASK</Text>
-                      <Text style={styles.followupTaskText}>{editNextVisitTask}</Text>
-                    </View>
-                  ) : null}
-                </>
-              ) : (
-                <Text style={styles.emptyText}>No follow-up date set above</Text>
-              )}
-            </View>
+              ))
+            )}
           </View>
-        ) : visitData.nextVisitDate ? (
+        )}
+
+        {/* ── Follow-up ──────────────────────────────────────────────────── */}
+        {!editing && (visitData.nextVisitDate ? (
           <View style={[styles.card, styles.followupCard]}>
             <View style={styles.cardHeader}>
               <View style={[styles.cardIconSmall, { backgroundColor: "#fef3c7" }]}>
@@ -833,7 +1140,7 @@ export default function VisitDetailScreen() {
               </View>
             </View>
           </View>
-        )}
+        ))}
 
         {!editing && (
           <TouchableOpacity style={styles.editButton} onPress={startEditing}>
@@ -843,6 +1150,7 @@ export default function VisitDetailScreen() {
         )}
       </ScrollView>
 
+      {/* Photo Lightbox */}
       <Modal visible={!!selectedPhoto} transparent animationType="fade" onRequestClose={() => setSelectedPhoto(null)}>
         <Pressable style={styles.lightbox} onPress={() => setSelectedPhoto(null)}>
           <TouchableOpacity style={styles.lightboxClose} onPress={() => setSelectedPhoto(null)}>
@@ -881,8 +1189,8 @@ const styles = StyleSheet.create({
   cropBadge: { flexDirection: "row", alignItems: "center", gap: 2, backgroundColor: "#dcfce7", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8, alignSelf: "flex-start", marginTop: 2 },
   cropBadgeText: { fontSize: 10, fontWeight: "600", color: "#15803d" },
   card: { backgroundColor: "#fff", borderRadius: 14, padding: 14, borderWidth: 1, borderColor: "#e5e7eb", gap: 10 },
-  cardHeader: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 6 },
-  cardTitle: { fontSize: 14, fontWeight: "600", color: "#1a1a2e" },
+  cardHeader: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 4 },
+  cardTitle: { fontSize: 14, fontWeight: "600", color: "#1a1a2e", flex: 1 },
   cardRow: { flexDirection: "row", alignItems: "center", gap: 12 },
   cardRowInfo: { flex: 1, gap: 1 },
   cardIcon: { width: 40, height: 40, borderRadius: 12, justifyContent: "center", alignItems: "center" },
@@ -892,37 +1200,61 @@ const styles = StyleSheet.create({
   cardValueSmall: { fontSize: 12, color: "#6b7280" },
   mapsButton: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 10, borderRadius: 12, backgroundColor: "#ecfdf5", marginTop: 4 },
   mapsButtonText: { fontSize: 12, fontWeight: "600", color: "#059669" },
-  obsText: { fontSize: 13, color: "#374151", lineHeight: 19 },
+  obsText: { fontSize: 13, color: "#374151", lineHeight: 20 },
   photosGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   photoThumb: { width: "31%", aspectRatio: 1, borderRadius: 12, overflow: "hidden" },
   photoImage: { width: "100%", height: "100%", resizeMode: "cover" },
   photoCaption: { position: "absolute", bottom: 0, left: 0, right: 0, backgroundColor: "rgba(0,0,0,0.5)", paddingHorizontal: 4, paddingVertical: 2 },
   photoCaptionText: { fontSize: 8, color: "#fff" },
-  emptyText: { fontSize: 12, color: "#9ca3af", textAlign: "center", paddingVertical: 16 },
+  photoThumbContainer: { width: "31%", aspectRatio: 1, borderRadius: 12, overflow: "hidden", position: "relative" },
+  photoRemove: { position: "absolute", top: 4, right: 4, width: 22, height: 22, borderRadius: 11, backgroundColor: "rgba(220,38,38,0.85)", justifyContent: "center", alignItems: "center" },
+  photoPendingBadge: { position: "absolute", bottom: 4, left: 4, backgroundColor: "#16a34a", paddingHorizontal: 5, paddingVertical: 2, borderRadius: 6 },
+  photoPendingText: { fontSize: 8, color: "#fff", fontWeight: "700" },
+  photoAddButton: { width: "31%", aspectRatio: 1, borderRadius: 12, borderWidth: 1.5, borderColor: "#d1d5db", borderStyle: "dashed", justifyContent: "center", alignItems: "center", gap: 4, backgroundColor: "#f9fafb" },
+  photoAddText: { fontSize: 10, color: "#9ca3af" },
+  emptyText: { fontSize: 12, color: "#9ca3af", textAlign: "center", paddingVertical: 12 },
+  // Recommendations - view mode
   recCard: { paddingVertical: 10 },
   recCardBorder: { borderBottomWidth: 1, borderBottomColor: "#f3f4f6" },
   recTop: { flexDirection: "row", gap: 10 },
-  recIcon: { width: 32, height: 32, borderRadius: 10, justifyContent: "center", alignItems: "center" },
+  recIcon: { width: 32, height: 32, borderRadius: 10, justifyContent: "center", alignItems: "center", flexShrink: 0 },
   recInfo: { flex: 1, gap: 3 },
-  recNameRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  recNameRow: { flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" },
   recName: { fontSize: 14, fontWeight: "600", color: "#1a1a2e" },
-  customBadge: { backgroundColor: "#fef3c7", paddingHorizontal: 5, paddingVertical: 1, borderRadius: 6 },
-  customBadgeText: { fontSize: 9, color: "#92400e", fontWeight: "600" },
   recCategory: { fontSize: 10, color: "#6b7280", backgroundColor: "#f3f4f6", paddingHorizontal: 6, paddingVertical: 1, borderRadius: 6, alignSelf: "flex-start" },
   recDetails: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   recDetail: { flexDirection: "row", alignItems: "center" },
   recDetailLabel: { fontSize: 10, color: "#6b7280" },
-  shareMenu: { position: "absolute", top: 60, right: 16, backgroundColor: "#fff", borderRadius: 12, borderWidth: 1, borderColor: "#e5e7eb", shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 8, elevation: 8, zIndex: 100, width: 260 },
-  shareMenuItem: { padding: 12 },
-  shareMenuTitle: { fontSize: 14, fontWeight: "600", color: "#1a1a2e" },
-  shareMenuDesc: { fontSize: 11, color: "#6b7280", marginTop: 2 },
-  shareMenuDivider: { height: 1, backgroundColor: "#f3f4f6" },
   recDetailValue: { fontSize: 12, fontWeight: "600", color: "#16a34a" },
   recDetailValueAmber: { fontSize: 12, fontWeight: "600", color: "#b45309" },
-  recNotesCard: { backgroundColor: "#f9fafb", borderRadius: 8, padding: 8, marginTop: 4 },
+  recNotesCard: { backgroundColor: "#f9fafb", borderRadius: 8, padding: 8, marginTop: 2 },
   recNotesText: { fontSize: 12, color: "#6b7280" },
+  // Recommendations - edit mode
+  editRecCard: { paddingVertical: 12, gap: 8 },
+  editRecCardBorder: { borderBottomWidth: 1, borderBottomColor: "#f3f4f6" },
+  editRecHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  recDeleteBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: "#fef2f2", justifyContent: "center", alignItems: "center" },
+  recEditFields: { flexDirection: "row", gap: 8 },
+  addRecRow: { flexDirection: "row", gap: 8 },
+  addRecBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, borderWidth: 1.5, borderColor: "#16a34a40", borderStyle: "dashed", borderRadius: 10, paddingVertical: 10 },
+  addRecBtnText: { fontSize: 12, color: "#16a34a", fontWeight: "600" },
+  searchBox: { flexDirection: "row", alignItems: "center", backgroundColor: "#f3f4f6", borderRadius: 10, paddingHorizontal: 10, height: 40, gap: 6 },
+  searchInput: { flex: 1, fontSize: 13, color: "#1a1a2e" },
+  itemRow: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "#f9fafb", borderRadius: 10, padding: 10, borderWidth: 1, borderColor: "#e5e7eb" },
+  itemName: { fontSize: 13, fontWeight: "500", color: "#1a1a2e" },
+  itemCategory: { fontSize: 10, color: "#6b7280" },
+  customItemRow: { flexDirection: "row", gap: 8, alignItems: "center" },
+  customAddBtn: { backgroundColor: "#16a34a", borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10, justifyContent: "center" },
+  customAddBtnText: { color: "#fff", fontWeight: "600", fontSize: 13 },
+  customCancelBtn: { paddingVertical: 10, paddingHorizontal: 8 },
+  customBadge: { backgroundColor: "#fef3c7", paddingHorizontal: 5, paddingVertical: 1, borderRadius: 6 },
+  customBadgeText: { fontSize: 9, color: "#92400e", fontWeight: "600" },
+  newBadge: { backgroundColor: "#dcfce7", paddingHorizontal: 5, paddingVertical: 1, borderRadius: 6 },
+  newBadgeText: { fontSize: 9, color: "#15803d", fontWeight: "700" },
+  fieldLabel: { fontSize: 10, color: "#6b7280", marginBottom: 4 },
+  fieldInput: { backgroundColor: "#f9fafb", borderRadius: 8, padding: 8, fontSize: 12, color: "#1a1a2e", borderWidth: 1, borderColor: "#e5e7eb" },
+  // Follow-up
   followupCard: { borderColor: "#fde68a80" },
-  followupCardPreview: { borderColor: "#16a34a30" },
   followupBox: { backgroundColor: "#fffbeb", borderRadius: 12, padding: 12, gap: 8 },
   followupRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   followupDate: { fontSize: 14, fontWeight: "600", color: "#92400e" },
@@ -937,28 +1269,34 @@ const styles = StyleSheet.create({
   noFollowupRow: { flexDirection: "row", alignItems: "center", gap: 12 },
   noFollowupTitle: { fontSize: 14, fontWeight: "500", color: "#1a1a2e" },
   noFollowupSub: { fontSize: 12, color: "#9ca3af" },
+  // Share menu
+  shareMenu: { position: "absolute", top: 60, right: 16, backgroundColor: "#fff", borderRadius: 12, borderWidth: 1, borderColor: "#e5e7eb", shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 8, elevation: 8, zIndex: 100, width: 260 },
+  shareMenuItem: { padding: 12 },
+  shareMenuTitle: { fontSize: 14, fontWeight: "600", color: "#1a1a2e" },
+  shareMenuDesc: { fontSize: 11, color: "#6b7280", marginTop: 2 },
+  shareMenuDivider: { height: 1, backgroundColor: "#f3f4f6" },
+  // Lightbox
   lightbox: { flex: 1, backgroundColor: "rgba(0,0,0,0.9)", justifyContent: "center", alignItems: "center", padding: 16 },
   lightboxClose: { position: "absolute", top: 60, right: 20, width: 40, height: 40, borderRadius: 20, backgroundColor: "rgba(255,255,255,0.1)", justifyContent: "center", alignItems: "center", zIndex: 10 },
   lightboxCloseText: { color: "#fff", fontSize: 18 },
   lightboxImage: { width: "100%", height: "80%", borderRadius: 12 },
+  // Edit inputs
   editLabel: { fontSize: 13, fontWeight: "500", color: "#374151", marginBottom: 4 },
-  editInput: { backgroundColor: "#f9fafb", borderRadius: 12, padding: 12, fontSize: 14, color: "#9ca3af", borderWidth: 1, borderColor: "#e5e7eb" },
-  dateInputRow: { flexDirection: "row", alignItems: "center", backgroundColor: "#f3f4f6", borderRadius: 14, paddingHorizontal: 12, height: 46 },
+  editInput: { backgroundColor: "#f9fafb", borderRadius: 12, padding: 12, fontSize: 14, color: "#1a1a2e", borderWidth: 1, borderColor: "#e5e7eb" },
   editTextArea: { minHeight: 100, textAlignVertical: "top" },
+  dateInputRow: { flexDirection: "row", alignItems: "center", backgroundColor: "#f3f4f6", borderRadius: 14, paddingHorizontal: 12, height: 46 },
   gpsButton: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "#f3f4f6", borderRadius: 14, paddingHorizontal: 12, height: 46, borderWidth: 1, borderColor: "#e5e7eb" },
-  gpsButtonText: { fontSize: 14, color: "#6b7280" },
-  quickRow: { flexDirection: "row", gap: 8, marginTop: 8 },
+  gpsButtonText: { fontSize: 14, color: "#6b7280", flex: 1 },
+  quickRow: { flexDirection: "row", gap: 8, marginTop: 4 },
   quickBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4, paddingVertical: 8, borderRadius: 10, borderWidth: 1, borderColor: "#e5e7eb" },
   quickBtnActive: { borderColor: "#16a34a", backgroundColor: "#dcfce720" },
   quickBtnText: { fontSize: 12, color: "#6b7280", fontWeight: "500" },
   quickBtnTextActive: { color: "#16a34a" },
+  // Save & Edit buttons
+  saveButton: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 16, borderRadius: 14, backgroundColor: "#16a34a" },
+  saveButtonDisabled: { opacity: 0.5 },
+  saveButtonText: { fontSize: 15, fontWeight: "700", color: "#fff" },
   editButton: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 14, borderRadius: 14, backgroundColor: "#ecfdf5", borderWidth: 1, borderColor: "#16a34a30" },
   editButtonText: { fontSize: 14, fontWeight: "600", color: "#16a34a" },
-  photoAddButton: { width: "31%", aspectRatio: 1, borderRadius: 12, borderWidth: 1, borderColor: "#e5e7eb", borderStyle: "dashed", justifyContent: "center", alignItems: "center", gap: 2, backgroundColor: "#f9fafb" },
-  photoAddText: { fontSize: 10, color: "#9ca3af" },
-  photoThumbContainer: { width: "31%", aspectRatio: 1, borderRadius: 12, overflow: "hidden", position: "relative" },
-  photoRemove: { position: "absolute", top: 4, right: 4, width: 20, height: 20, borderRadius: 10, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", alignItems: "center" },
-  obsHint: { fontSize: 10, color: "#9ca3af", marginTop: 4, fontStyle: "italic" },
-  editRecsNote: { backgroundColor: "#fffbeb", borderRadius: 8, padding: 10, borderWidth: 1, borderColor: "#fde68a" },
-  editRecsNoteText: { fontSize: 12, color: "#92400e", lineHeight: 17 },
+  obsHint: { fontSize: 10, color: "#9ca3af", marginTop: 2, fontStyle: "italic" },
 });
