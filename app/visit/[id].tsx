@@ -513,13 +513,33 @@ export default function VisitDetailScreen() {
               <TextInput
                 style={[styles.editInput, styles.editTextArea]}
                 value={editObservations}
-                onChangeText={setEditObservations}
+                onChangeText={(text) => {
+                  // Auto-numbering: when user types a newline, prepend next number
+                  const lines = text.split("\n");
+                  const prevLines = editObservations.split("\n");
+                  if (lines.length > prevLines.length) {
+                    // A new line was added
+                    const newLastLine = lines[lines.length - 1];
+                    // Check if previous lines have numbering pattern
+                    const prevNonEmpty = lines.slice(0, -1).filter(l => l.trim());
+                    const lastNonEmpty = prevNonEmpty[prevNonEmpty.length - 1] || "";
+                    const numMatch = lastNonEmpty.match(/^(\d+)[\.\)\s]/);
+                    if (numMatch && newLastLine === "") {
+                      const nextNum = parseInt(numMatch[1]) + 1;
+                      const updated = [...lines.slice(0, -1), `${nextNum}. `];
+                      setEditObservations(updated.join("\n"));
+                      return;
+                    }
+                  }
+                  setEditObservations(text);
+                }}
                 placeholder="Describe crop conditions, symptoms, field observations..."
                 placeholderTextColor="#9ca3af"
                 multiline
                 numberOfLines={5}
                 textAlignVertical="top"
               />
+              <Text style={styles.obsHint}>Tip: Type "1. " to start auto-numbering. Press Enter to continue.</Text>
             </View>
 
             <View style={styles.card}>
@@ -681,6 +701,11 @@ export default function VisitDetailScreen() {
             </View>
             <Text style={styles.cardTitle}>Recommended Products ({recommendations.length})</Text>
           </View>
+          {editing && (
+            <View style={styles.editRecsNote}>
+              <Text style={styles.editRecsNoteText}>To add or remove recommended products, save this edit first, then create a new visit or use the customer page.</Text>
+            </View>
+          )}
           {recommendations.length === 0 ? (
             <Text style={styles.emptyText}>No products recommended in this visit</Text>
           ) : (
@@ -731,12 +756,32 @@ export default function VisitDetailScreen() {
         </View>
 
         {editing ? (
-          <View style={[styles.card, styles.followupCardPreview]}>
+          <View style={[styles.card, styles.followupCard]}>
             <View style={styles.cardHeader}>
               <View style={[styles.cardIconSmall, { backgroundColor: "#fef3c7" }]}>
                 <Bell color="#b45309" size={14} />
               </View>
-              <Text style={styles.cardTitle}>Follow-up (editing above)</Text>
+              <Text style={styles.cardTitle}>Follow-up Preview</Text>
+            </View>
+            <View style={styles.followupBox}>
+              {editNextVisitDate ? (
+                <>
+                  <View style={styles.followupRow}>
+                    <Calendar color="#b45309" size={14} />
+                    <Text style={styles.followupDate}>
+                      {new Date(editNextVisitDate).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "long", year: "numeric" })}
+                    </Text>
+                  </View>
+                  {editNextVisitTask ? (
+                    <View style={styles.followupTaskSection}>
+                      <Text style={styles.followupTaskLabel}>TASK</Text>
+                      <Text style={styles.followupTaskText}>{editNextVisitTask}</Text>
+                    </View>
+                  ) : null}
+                </>
+              ) : (
+                <Text style={styles.emptyText}>No follow-up date set above</Text>
+              )}
             </View>
           </View>
         ) : visitData.nextVisitDate ? (
@@ -913,4 +958,7 @@ const styles = StyleSheet.create({
   photoAddText: { fontSize: 10, color: "#9ca3af" },
   photoThumbContainer: { width: "31%", aspectRatio: 1, borderRadius: 12, overflow: "hidden", position: "relative" },
   photoRemove: { position: "absolute", top: 4, right: 4, width: 20, height: 20, borderRadius: 10, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", alignItems: "center" },
+  obsHint: { fontSize: 10, color: "#9ca3af", marginTop: 4, fontStyle: "italic" },
+  editRecsNote: { backgroundColor: "#fffbeb", borderRadius: 8, padding: 10, borderWidth: 1, borderColor: "#fde68a" },
+  editRecsNoteText: { fontSize: 12, color: "#92400e", lineHeight: 17 },
 });

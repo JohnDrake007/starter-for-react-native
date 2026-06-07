@@ -369,13 +369,30 @@ export default function NewVisitScreen() {
       <TextInput
         style={[s.input, s.textArea]}
         value={observations}
-        onChangeText={setObservations}
+        onChangeText={(text) => {
+          const lines = text.split("\n");
+          const prevLines = observations.split("\n");
+          if (lines.length > prevLines.length) {
+            const newLastLine = lines[lines.length - 1];
+            const prevNonEmpty = lines.slice(0, -1).filter(l => l.trim());
+            const lastNonEmpty = prevNonEmpty[prevNonEmpty.length - 1] || "";
+            const numMatch = lastNonEmpty.match(/^(\d+)[\.\)\s]/);
+            if (numMatch && newLastLine === "") {
+              const nextNum = parseInt(numMatch[1]) + 1;
+              const updated = [...lines.slice(0, -1), `${nextNum}. `];
+              setObservations(updated.join("\n"));
+              return;
+            }
+          }
+          setObservations(text);
+        }}
         placeholder="Describe crop conditions, symptoms, field observations..."
         placeholderTextColor="#9ca3af"
         multiline
         numberOfLines={5}
         textAlignVertical="top"
       />
+      <Text style={s.obsHint}>Tip: Type "1. " to start auto-numbering. Press Enter to continue.</Text>
 
       <Text style={s.label}>Photos</Text>
       <View style={s.photosRow}>
@@ -729,4 +746,5 @@ const s = StyleSheet.create({
   navButtonPrimary: { backgroundColor: "#16a34a" },
   navButtonPrimaryText: { fontSize: 14, fontWeight: "600", color: "#fff" },
   navButtonDisabled: { opacity: 0.5 },
+  obsHint: { fontSize: 10, color: "#9ca3af", marginTop: 4, fontStyle: "italic" },
 });

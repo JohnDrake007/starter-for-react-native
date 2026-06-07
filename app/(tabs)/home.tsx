@@ -167,27 +167,27 @@ export default function HomeScreen() {
         )}
 
         <View style={styles.statsRow}>
-          <View style={[styles.statCard, { backgroundColor: "#ecfdf5" }]}>
+          <TouchableOpacity style={[styles.statCard, { backgroundColor: "#ecfdf5" }]} onPress={() => router.push("/(tabs)/customers")} activeOpacity={0.75}>
             <View style={[styles.statIcon, { backgroundColor: "#d1fae5" }]}>
               <Users color="#059669" size={16} />
             </View>
             <Text style={[styles.statNumber, { color: "#047857" }]}>{stats.totalCustomers}</Text>
             <Text style={[styles.statLabel, { color: "#059669" }]}>Customers</Text>
-          </View>
-          <View style={[styles.statCard, { backgroundColor: "#fffbeb" }]}>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.statCard, { backgroundColor: "#fffbeb" }]} onPress={() => router.push("/visits" as any)} activeOpacity={0.75}>
             <View style={[styles.statIcon, { backgroundColor: "#fef3c7" }]}>
               <ClipboardList color="#b45309" size={16} />
             </View>
             <Text style={[styles.statNumber, { color: "#92400e" }]}>{stats.totalVisits}</Text>
             <Text style={[styles.statLabel, { color: "#b45309" }]}>Visits</Text>
-          </View>
-          <View style={[styles.statCard, { backgroundColor: "#fff1f2" }]}>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.statCard, { backgroundColor: "#fff1f2" }]} onPress={() => router.push("/(tabs)/calendar")} activeOpacity={0.75}>
             <View style={[styles.statIcon, { backgroundColor: "#fecdd3" }]}>
               <Bell color="#e11d48" size={16} />
             </View>
             <Text style={[styles.statNumber, { color: "#be123c" }]}>{stats.upcomingReminders}</Text>
             <Text style={[styles.statLabel, { color: "#e11d48" }]}>Reminders</Text>
-          </View>
+          </TouchableOpacity>
         </View>
 
         <View style={styles.quickActionsRow}>
@@ -304,7 +304,7 @@ const styles = StyleSheet.create({
   badge: { flexDirection: "row", alignItems: "center", backgroundColor: "#dcfce7", paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, gap: 4 },
   badgeText: { fontSize: 12, fontWeight: "600", color: "#16a34a" },
   statsRow: { flexDirection: "row", gap: 10, marginBottom: 20 },
-  statCard: { flex: 1, borderRadius: 14, padding: 14, alignItems: "center" },
+  statCard: { flex: 1, borderRadius: 14, padding: 14, alignItems: "center", borderWidth: 1, borderColor: "rgba(0,0,0,0.04)" },
   statIcon: { width: 34, height: 34, borderRadius: 10, justifyContent: "center", alignItems: "center", marginBottom: 6 },
   statNumber: { fontSize: 24, fontWeight: "700" },
   statLabel: { fontSize: 11, fontWeight: "600" },
