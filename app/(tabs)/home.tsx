@@ -156,7 +156,7 @@ export default function HomeScreen() {
           <View style={styles.badge}>
             <SyncStatusIcon size={14} />
             <Sprout color="#16a34a" size={14} />
-            <Text style={styles.badgeText}>Field Agent</Text>
+            <Text style={styles.badgeText}>CCS SmartVisit</Text>
           </View>
         </View>
 

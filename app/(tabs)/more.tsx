@@ -86,7 +86,7 @@ export default function MoreScreen() {
             <Leaf color="#16a34a" size={20} />
           </View>
           <View style={styles.menuInfo}>
-            <Text style={styles.menuTitle}>AgriField Agent</Text>
+            <Text style={styles.menuTitle}>CCS SmartVisit</Text>
             <Text style={styles.menuSub}>Field Service & Crop Advisory Tracker</Text>
           </View>
         </View>
@@ -105,9 +105,8 @@ export default function MoreScreen() {
           <Text style={styles.aboutTitle}>About</Text>
         </View>
         <Text style={styles.aboutText}>
-          AgriField Agent helps agricultural field agents manage farmer visits, diagnose crop issues,
-          prescribe fertilizers and pesticides, and schedule follow-up visits. Built for the Kerala
-          hill district farming community.
+          CCS SmartVisit helps Crop Care Solutions field agents manage farmer visits, diagnose crop issues,
+          prescribe fertilizers and pesticides, and schedule follow-up visits.
         </Text>
         <View style={styles.cropTags}>
           {["Cardamom", "Pepper", "Coffee", "Tea"].map((crop) => (

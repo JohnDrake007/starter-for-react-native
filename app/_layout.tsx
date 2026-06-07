@@ -1,9 +1,8 @@
 import { Stack } from "expo-router";
-import { View, ActivityIndicator, StyleSheet, Text } from "react-native";
+import { View, ActivityIndicator, StyleSheet, Text, Image } from "react-native";
 import { useEffect, useState } from "react";
 import { NetworkProvider } from "@/lib/network-provider";
 import { initSync } from "@/lib/sync-manager";
-import { Sprout } from "@/components/Icons";
 
 function AppContent() {
   return (
@@ -29,12 +28,14 @@ function AppContent() {
 function SplashScreen() {
   return (
     <View style={splashStyles.container}>
-      <View style={splashStyles.iconContainer}>
-        <Sprout color="#16a34a" size={48} />
-      </View>
-      <Text style={splashStyles.title}>Field Agent</Text>
-      <ActivityIndicator size="small" color="#16a34a" style={{ marginTop: 16 }} />
-      <Text style={splashStyles.subtitle}>Loading local data...</Text>
+      <Image
+        source={require("../assets/images/icon.png")}
+        style={splashStyles.logo}
+        resizeMode="contain"
+      />
+      <Text style={splashStyles.title}>CCS SmartVisit</Text>
+      <ActivityIndicator size="small" color="#3a5f3a" style={{ marginTop: 16 }} />
+      <Text style={splashStyles.subtitle}>Loading...</Text>
     </View>
   );
 }
@@ -62,21 +63,19 @@ const splashStyles = StyleSheet.create({
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "#fafafa",
+    backgroundColor: "#ffffff",
   },
-  iconContainer: {
-    width: 80,
-    height: 80,
+  logo: {
+    width: 140,
+    height: 140,
+    marginBottom: 20,
     borderRadius: 24,
-    backgroundColor: "#dcfce7",
-    justifyContent: "center",
-    alignItems: "center",
-    marginBottom: 16,
   },
   title: {
     fontSize: 22,
     fontWeight: "700",
-    color: "#1a1a2e",
+    color: "#2d4a2d",
+    letterSpacing: 0.3,
   },
   subtitle: {
     fontSize: 13,
