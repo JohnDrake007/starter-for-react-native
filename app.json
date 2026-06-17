@@ -43,7 +43,16 @@
           ]
         }
       ],
-      "expo-asset"
+      "expo-asset",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/icon.png",
+          "color": "#16a34a",
+          "defaultChannel": "visit-reminders",
+          "sounds": []
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

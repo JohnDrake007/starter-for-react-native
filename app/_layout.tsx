@@ -1,10 +1,28 @@
-import { Stack } from "expo-router";
+import { Stack, useRouter } from "expo-router";
 import { View, ActivityIndicator, StyleSheet, Text, Image } from "react-native";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { NetworkProvider } from "@/lib/network-provider";
 import { initSync } from "@/lib/sync-manager";
+import * as Notifications from "expo-notifications";
+import {
+  configureNotificationHandler,
+  scheduleVisitReminders,
+} from "@/lib/notification-manager";
 
 function AppContent() {
+  const router = useRouter();
+
+  // Navigate to the relevant visit when a notification is tapped
+  useEffect(() => {
+    const sub = Notifications.addNotificationResponseReceivedListener((response) => {
+      const visitId = response.notification.request.content.data?.visitId;
+      if (visitId) {
+        router.push(`/visit/${visitId}`);
+      }
+    });
+    return () => sub.remove();
+  }, [router]);
+
   return (
     <View style={{ flex: 1 }}>
       <Stack
@@ -43,8 +61,15 @@ function SplashScreen() {
 export default function RootLayout() {
   const [ready, setReady] = useState(false);
 
+  // Configure notification handler immediately (before any await)
+  configureNotificationHandler();
+
   useEffect(() => {
-    initSync().then(() => setReady(true));
+    initSync().then(async () => {
+      setReady(true);
+      // Schedule device notifications after initial data is loaded
+      await scheduleVisitReminders();
+    });
   }, []);
 
   if (!ready) {

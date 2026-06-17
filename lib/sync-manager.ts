@@ -1,5 +1,16 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { databases, storage, ID, Query, DATABASE_ID, CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, ITEMS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, VISIT_PHOTOS_COLLECTION_ID, STORAGE_BUCKET_ID } from "./appwrite";
+// Lazy import to avoid circular deps — imported inline in syncNow
+let _scheduleVisitReminders: (() => Promise<void>) | null = null;
+async function refreshNotifications() {
+  try {
+    if (!_scheduleVisitReminders) {
+      const mod = await import("./notification-manager");
+      _scheduleVisitReminders = mod.scheduleVisitReminders;
+    }
+    await _scheduleVisitReminders();
+  } catch {}
+}
 
 // ── Storage Keys ──────────────────────────────────────────────────────────────
 const STORAGE_KEYS: Record<string, string> = {
@@ -276,6 +287,9 @@ export async function syncNow(): Promise<void> {
     // ── 3. Update last sync time ──
     lastSyncTime = new Date().toISOString();
     await AsyncStorage.setItem(LAST_SYNC_KEY, lastSyncTime);
+
+    // ── 4. Re-schedule device notifications to reflect fresh data ──
+    refreshNotifications();
 
     broadcast("idle", "Sync complete");
   } catch (e: any) {
