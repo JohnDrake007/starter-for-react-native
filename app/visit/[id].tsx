@@ -29,6 +29,38 @@ interface Recommendation {
   category?: string;
   unit?: string;
   _deleted?: boolean;
+  // Prescription section marker
+  isSectionMarker?: boolean;
+  sectionTitle?: string;
+  sectionNote?: string;
+}
+
+interface PrescriptionSection {
+  markerId: string;          // $id of the §HDR§ recommendation
+  title: string;
+  sectionNote: string;
+  products: Recommendation[];
+}
+
+function decodeToPrescription(recs: Recommendation[]): PrescriptionSection[] {
+  const sections: PrescriptionSection[] = [];
+  let current: PrescriptionSection | null = null;
+  for (const r of recs) {
+    if (r.isSectionMarker) {
+      if (current) sections.push(current);
+      current = { markerId: r.$id, title: r.sectionTitle || "", sectionNote: r.sectionNote || "", products: [] };
+    } else if (current) {
+      current.products.push(r);
+    } else {
+      // Legacy recs without a section marker — bucket into a default section
+      if (sections.length === 0) {
+        current = { markerId: "legacy", title: "RECOMMENDATIONS", sectionNote: "", products: [] };
+      }
+      current!.products.push(r);
+    }
+  }
+  if (current) sections.push(current);
+  return sections;
 }
 
 interface Photo {
@@ -117,34 +149,40 @@ export default function VisitDetailScreen() {
       } catch {}
 
       try {
-        const recsRes = getCollection(RECOMMENDATIONS_COLLECTION_ID).filter(r => r.visitId === id);
-        const recs: Recommendation[] = recsRes.map((r) => ({
-          $id: r.$id,
-          itemId: r.itemId || undefined,
-          customItem: r.customItem || undefined,
-          name: r.customItem || r.itemId || "Unknown",
-          dosage: r.dosage || "",
-          quantity: r.quantity || "",
-          notes: r.notes || "",
-          isCustom: !!r.customItem,
-        }));
+        const recsRes = getCollection(RECOMMENDATIONS_COLLECTION_ID).filter((r: any) => r.visitId === id);
 
-        if (recs.some((r) => r.itemId)) {
-          try {
-            const itemsRes = getCollection(ITEMS_COLLECTION_ID);
-            const itemMap: Record<string, { name: string; category?: string; unit?: string }> = {};
-            itemsRes.forEach((item) => {
-              itemMap[item.$id] = { name: item.name, category: item.category, unit: item.unit };
-            });
-            recs.forEach((r) => {
-              if (r.itemId && itemMap[r.itemId]) {
-                r.name = r.isCustom ? r.customItem || r.name : itemMap[r.itemId].name;
-                r.category = itemMap[r.itemId].category;
-                r.unit = itemMap[r.itemId].unit;
-              }
-            });
-          } catch {}
-        }
+        // Build item name map
+        const itemMap: Record<string, { name: string; category?: string; unit?: string }> = {};
+        try {
+          const itemsRes = getCollection(ITEMS_COLLECTION_ID);
+          itemsRes.forEach((item: any) => { itemMap[item.$id] = { name: item.name, category: item.category, unit: item.unit }; });
+        } catch {}
+
+        const recs: Recommendation[] = recsRes.map((r: any) => {
+          // Detect §HDR§ section markers
+          if (r.customItem && r.customItem.startsWith("§HDR§")) {
+            const parts = r.customItem.split("§");
+            // parts: ["", "HDR", title, sectionNote]
+            return {
+              $id: r.$id, itemId: undefined, customItem: r.customItem,
+              name: "", dosage: "", quantity: "", notes: "", isCustom: true,
+              isSectionMarker: true, sectionTitle: parts[2] || "", sectionNote: parts[3] || "",
+            };
+          }
+          const itemInfo = r.itemId ? itemMap[r.itemId] : null;
+          return {
+            $id: r.$id,
+            itemId: r.itemId || undefined,
+            customItem: r.customItem || undefined,
+            name: r.customItem ? r.customItem : (itemInfo ? itemInfo.name : r.itemId || "Unknown"),
+            dosage: r.dosage || "",
+            quantity: r.quantity || "",
+            notes: r.notes || "",
+            isCustom: !!r.customItem,
+            category: itemInfo?.category,
+            unit: itemInfo?.unit,
+          };
+        });
         setRecommendations(recs);
       } catch {
         setRecommendations([]);
@@ -458,8 +496,30 @@ export default function VisitDetailScreen() {
     Linking.openURL(url).catch(() => Alert.alert("Error", "Could not open maps"));
   };
 
+  const buildPrescriptionText = (sections: PrescriptionSection[]): string => {
+    const lines: string[] = [];
+    for (const sec of sections) {
+      if (sec.products.length === 0) continue;
+      lines.push("");
+      if (sec.title) lines.push(sec.title);
+      lines.push("");
+      sec.products.forEach((p, i) => {
+        if (i > 0) lines.push("+");
+        const namePadded = p.name.toUpperCase().padEnd(14);
+        lines.push(p.quantity ? `${namePadded} - ${p.quantity}` : p.name.toUpperCase());
+        if (p.notes) lines.push(`(${p.notes.replace(/^\(|\)$/g, "")})`);
+      });
+      if (sec.sectionNote) {
+        lines.push("");
+        lines.push(sec.sectionNote);
+      }
+    }
+    return lines.join("\n");
+  };
+
   const shareViaWhatsApp = () => {
     if (!visitData || !customer) return;
+    const prescSections = decodeToPrescription(recommendations);
     const lines: string[] = [];
     lines.push("*Visit Report*");
     lines.push("");
@@ -479,14 +539,9 @@ export default function VisitDetailScreen() {
       lines.push(visitData.observations);
       lines.push("");
     }
-    if (recommendations.length > 0) {
-      lines.push("*Recommended Products:*");
-      recommendations.forEach((rec, i) => {
-        let line = `  ${i + 1}. ${rec.name}`;
-        if (rec.dosage) line += ` — Dosage: ${rec.dosage}`;
-        if (rec.quantity) line += ` — Qty: ${rec.quantity}`;
-        lines.push(line);
-      });
+    if (prescSections.some((s) => s.products.length > 0)) {
+      lines.push("*Prescription:*");
+      lines.push(buildPrescriptionText(prescSections));
       lines.push("");
     }
     if (visitData.nextVisitDate) {
@@ -500,27 +555,19 @@ export default function VisitDetailScreen() {
 
   const shareShopReport = () => {
     if (!visitData || !customer) return;
+    const prescSections = decodeToPrescription(recommendations);
     const lines: string[] = [];
-    lines.push("*Farm Advisory*");
-    lines.push("");
-    lines.push(`*Farmer:* ${customer.name}`);
-    if (customer.cropType) lines.push(`*Crop:* ${customer.cropType}`);
-    lines.push(`*Phone:* ${customer.phone}`);
+    lines.push(`*${customer.name}*`);
+    if (customer.cropType) lines.push(`Crop: ${customer.cropType}`);
+    lines.push(`Ph: ${customer.phone}`);
     lines.push("");
     if (visitData.observations) {
       lines.push("*Observations:*");
       lines.push(visitData.observations);
       lines.push("");
     }
-    if (recommendations.length > 0) {
-      lines.push("*Recommendations:*");
-      recommendations.forEach((rec, i) => {
-        let line = `  ${i + 1}. ${rec.name}`;
-        if (rec.dosage) line += ` — ${rec.dosage}`;
-        if (rec.quantity) line += ` (${rec.quantity})`;
-        lines.push(line);
-      });
-      lines.push("");
+    if (prescSections.some((s) => s.products.length > 0)) {
+      lines.push(buildPrescriptionText(prescSections));
     }
     const text = lines.join("\n");
     const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(text)}`;
@@ -1031,64 +1078,65 @@ export default function VisitDetailScreen() {
           </View>
         )}
 
-        {/* ── Recommended Products (View Mode) ────────────────────────── */}
-        {!editing && (
-          <View style={styles.card}>
-            <View style={styles.cardHeader}>
-              <View style={[styles.cardIconSmall, { backgroundColor: "#dcfce7" }]}>
-                <Package color="#16a34a" size={14} />
-              </View>
-              <Text style={styles.cardTitle}>Recommended Products ({recommendations.length})</Text>
-            </View>
-            {recommendations.length === 0 ? (
-              <Text style={styles.emptyText}>No products recommended in this visit</Text>
-            ) : (
-              recommendations.map((rec, idx) => (
-                <View key={rec.$id || idx} style={[styles.recCard, idx < recommendations.length - 1 && styles.recCardBorder]}>
-                  <View style={styles.recTop}>
-                    <View style={[styles.recIcon, { backgroundColor: "#dcfce7" }]}>
-                      <Package color="#16a34a" size={14} />
-                    </View>
-                    <View style={styles.recInfo}>
-                      <View style={styles.recNameRow}>
-                        <Text style={styles.recName}>{rec.name}</Text>
-                        {rec.isCustom && <View style={styles.customBadge}><Text style={styles.customBadgeText}>Custom</Text></View>}
-                      </View>
-                      {rec.category ? (
-                        <Text style={styles.recCategory}>{rec.category}</Text>
-                      ) : null}
-                      <View style={styles.recDetails}>
-                        {rec.dosage ? (
-                          <View style={styles.recDetail}>
-                            <Text style={styles.recDetailLabel}>Dosage: </Text>
-                            <Text style={styles.recDetailValue}>{rec.dosage}</Text>
-                          </View>
-                        ) : null}
-                        {rec.quantity ? (
-                          <View style={styles.recDetail}>
-                            <Text style={styles.recDetailLabel}>Qty: </Text>
-                            <Text style={styles.recDetailValueAmber}>{rec.quantity}</Text>
-                          </View>
-                        ) : null}
-                        {rec.unit ? (
-                          <View style={styles.recDetail}>
-                            <Text style={styles.recDetailLabel}>Unit: </Text>
-                            <Text style={styles.recDetailValue}>{rec.unit}</Text>
-                          </View>
-                        ) : null}
-                      </View>
-                      {rec.notes ? (
-                        <View style={styles.recNotesCard}>
-                          <Text style={styles.recNotesText}>{rec.notes}</Text>
-                        </View>
-                      ) : null}
-                    </View>
-                  </View>
+        {/* ── Prescription View (View Mode) ────────────────────────────── */}
+        {!editing && (() => {
+          const prescSections = decodeToPrescription(recommendations);
+          const hasProducts = prescSections.some((s) => s.products.length > 0);
+          return (
+            <View style={styles.card}>
+              <View style={styles.cardHeader}>
+                <View style={[styles.cardIconSmall, { backgroundColor: "#dcfce7" }]}>
+                  <Package color="#16a34a" size={14} />
                 </View>
-              ))
-            )}
-          </View>
-        )}
+                <Text style={styles.cardTitle}>
+                  Prescription ({prescSections.filter((s) => s.products.length > 0).length} section{prescSections.filter((s) => s.products.length > 0).length !== 1 ? "s" : ""})
+                </Text>
+              </View>
+              {!hasProducts ? (
+                <Text style={styles.emptyText}>No products recommended in this visit</Text>
+              ) : (
+                <View style={styles.prescriptionContainer}>
+                  {prescSections.map((sec, secIdx) => {
+                    if (sec.products.length === 0) return null;
+                    return (
+                      <View key={sec.markerId} style={[styles.prescSection, secIdx > 0 && styles.prescSectionGap]}>
+                        {/* Section title */}
+                        {sec.title ? (
+                          <Text style={styles.prescSectionTitle}>{sec.title}</Text>
+                        ) : null}
+                        {/* Products with + separator */}
+                        {sec.products.map((p, pIdx) => (
+                          <View key={p.$id}>
+                            {pIdx > 0 && (
+                              <View style={styles.prescPlusRow}>
+                                <Text style={styles.prescPlus}>+</Text>
+                              </View>
+                            )}
+                            <View style={styles.prescProductRow}>
+                              <Text style={styles.prescProductName}>{p.name.toUpperCase()}</Text>
+                              {p.quantity ? (
+                                <Text style={styles.prescProductQty}>— {p.quantity}</Text>
+                              ) : null}
+                            </View>
+                            {p.notes ? (
+                              <Text style={styles.prescSubLabel}>({p.notes.replace(/^\(|\)$/g, "")})</Text>
+                            ) : null}
+                          </View>
+                        ))}
+                        {/* Section note */}
+                        {sec.sectionNote ? (
+                          <View style={styles.prescNoteRow}>
+                            <Text style={styles.prescNote}>{sec.sectionNote}</Text>
+                          </View>
+                        ) : null}
+                      </View>
+                    );
+                  })}
+                </View>
+              )}
+            </View>
+          );
+        })()}
 
         {/* ── Follow-up ──────────────────────────────────────────────────── */}
         {!editing && (visitData.nextVisitDate ? (
@@ -1299,4 +1347,17 @@ const styles = StyleSheet.create({
   editButton: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 14, borderRadius: 14, backgroundColor: "#ecfdf5", borderWidth: 1, borderColor: "#16a34a30" },
   editButtonText: { fontSize: 14, fontWeight: "600", color: "#16a34a" },
   obsHint: { fontSize: 10, color: "#9ca3af", marginTop: 2, fontStyle: "italic" },
+  // ── Prescription view styles ──────────────────────────────────────────────
+  prescriptionContainer: { gap: 0 },
+  prescSection: { gap: 2 },
+  prescSectionGap: { marginTop: 20, paddingTop: 20, borderTopWidth: 1, borderTopColor: "#f3f4f6" },
+  prescSectionTitle: { fontSize: 13, fontWeight: "800", color: "#1a1a2e", letterSpacing: 2, marginBottom: 8, textTransform: "uppercase" },
+  prescProductRow: { flexDirection: "row", alignItems: "baseline", justifyContent: "space-between", paddingVertical: 4 },
+  prescProductName: { fontSize: 14, fontWeight: "700", color: "#1a1a2e", flex: 1, letterSpacing: 0.5, fontVariant: ["tabular-nums"] },
+  prescProductQty: { fontSize: 14, fontWeight: "600", color: "#16a34a", marginLeft: 8 },
+  prescSubLabel: { fontSize: 12, color: "#6b7280", fontStyle: "italic", paddingLeft: 2, marginTop: -2, marginBottom: 2 },
+  prescPlusRow: { alignItems: "flex-start", paddingVertical: 4, paddingLeft: 2 },
+  prescPlus: { fontSize: 18, fontWeight: "700", color: "#9ca3af", lineHeight: 22 },
+  prescNoteRow: { marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: "#f3f4f6" },
+  prescNote: { fontSize: 13, color: "#6b7280", fontStyle: "italic" },
 });
