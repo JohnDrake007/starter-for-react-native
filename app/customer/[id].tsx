@@ -2,7 +2,7 @@ import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity, A
 import { useState, useCallback } from "react";
 import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ArrowLeft, Phone, MapPin, Sprout, Calendar, Package, Share2, Pencil, Check, X, PlusCircle, ExternalLink, Eye, Camera, ArrowRight, Users } from "@/components/Icons";
+import { ArrowLeft, Phone, MapPin, Sprout, Calendar, Package, Share2, Pencil, Check, X, PlusCircle, ExternalLink, Eye, Camera, ArrowRight, Users, TrendingUp, TrendingDown, IndianRupee } from "@/components/Icons";
 import { CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, ITEMS_COLLECTION_ID } from "@/lib/appwrite";
 import { getCollection, getDocument, updateDocument } from "@/lib/sync-manager";
 import { useNetwork } from "@/lib/network-provider";
@@ -345,6 +345,55 @@ export default function CustomerDetailScreen() {
                   <Text style={styles.mapsLinkAction}>Open in Maps</Text>
                 </TouchableOpacity>
               ) : null}
+
+              {/* Opening / Closing Balance */}
+              {(customer.opening_balance !== undefined || customer.openingBalance !== undefined ||
+                customer.closing_balance !== undefined) && (
+                <View style={styles.balanceSection}>
+                  <View style={styles.balanceSectionHeader}>
+                    <IndianRupee color="#6b7280" size={13} />
+                    <Text style={styles.balanceSectionTitle}>Tally Balances</Text>
+                  </View>
+                  <View style={styles.balanceRow}>
+                    {(() => {
+                      const openBal = customer.opening_balance ?? customer.openingBalance ?? null;
+                      const closeBal = customer.closing_balance ?? null;
+                      return (
+                        <>
+                          {openBal !== null && (
+                            <View style={styles.balanceCard}>
+                              <Text style={styles.balanceCardLabel}>Opening Balance</Text>
+                              <View style={styles.balanceAmtRow}>
+                                {openBal < 0 ? <TrendingDown color="#dc2626" size={14} /> : <TrendingUp color="#16a34a" size={14} />}
+                                <Text style={[styles.balanceAmt, openBal < 0 && styles.balanceAmtDr]}>
+                                  ₹{Math.abs(openBal).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </Text>
+                              </View>
+                              <Text style={[styles.balanceDrCr, openBal < 0 ? styles.drText : styles.crText]}>
+                                {openBal < 0 ? "Dr" : "Cr"}
+                              </Text>
+                            </View>
+                          )}
+                          {closeBal !== null && (
+                            <View style={styles.balanceCard}>
+                              <Text style={styles.balanceCardLabel}>Closing Balance</Text>
+                              <View style={styles.balanceAmtRow}>
+                                {closeBal < 0 ? <TrendingDown color="#dc2626" size={14} /> : <TrendingUp color="#16a34a" size={14} />}
+                                <Text style={[styles.balanceAmt, closeBal < 0 && styles.balanceAmtDr]}>
+                                  ₹{Math.abs(closeBal).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </Text>
+                              </View>
+                              <Text style={[styles.balanceDrCr, closeBal < 0 ? styles.drText : styles.crText]}>
+                                {closeBal < 0 ? "Dr" : "Cr"}
+                              </Text>
+                            </View>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </View>
+                </View>
+              )}
             </View>
           )}
         </View>
@@ -523,4 +572,16 @@ const styles = StyleSheet.create({
   quickChipText: { fontSize: 10, color: "#9ca3af", fontWeight: "500" },
   viewAllButton: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 12, borderRadius: 14, borderWidth: 1.5, borderColor: "#16a34a30", backgroundColor: "#fff" },
   viewAllText: { fontSize: 14, fontWeight: "600", color: "#16a34a" },
+  balanceSection: { borderTopWidth: 1, borderTopColor: "#f3f4f6", paddingTop: 12, gap: 8 },
+  balanceSectionHeader: { flexDirection: "row", alignItems: "center", gap: 6 },
+  balanceSectionTitle: { fontSize: 12, fontWeight: "600", color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.5 },
+  balanceRow: { flexDirection: "row", gap: 10 },
+  balanceCard: { flex: 1, backgroundColor: "#f9fafb", borderRadius: 12, padding: 12, borderWidth: 1, borderColor: "#e5e7eb", gap: 4 },
+  balanceCardLabel: { fontSize: 11, color: "#9ca3af", fontWeight: "500" },
+  balanceAmtRow: { flexDirection: "row", alignItems: "center", gap: 4 },
+  balanceAmt: { fontSize: 15, fontWeight: "700", color: "#16a34a" },
+  balanceAmtDr: { color: "#dc2626" },
+  balanceDrCr: { fontSize: 10, fontWeight: "700", paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4, alignSelf: "flex-start" },
+  crText: { color: "#15803d", backgroundColor: "#dcfce7" },
+  drText: { color: "#b91c1c", backgroundColor: "#fecdd3" },
 });

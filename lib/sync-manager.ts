@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { databases, storage, ID, Query, DATABASE_ID, CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, ITEMS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, VISIT_PHOTOS_COLLECTION_ID, STORAGE_BUCKET_ID } from "./appwrite";
+import { databases, storage, ID, Query, DATABASE_ID, CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, ITEMS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, VISIT_PHOTOS_COLLECTION_ID, STORAGE_BUCKET_ID, INVENTORY_ITEMS_COLLECTION_ID, INVENTORY_BATCHES_COLLECTION_ID } from "./appwrite";
 // Lazy import to avoid circular deps — imported inline in syncNow
 let _scheduleVisitReminders: (() => Promise<void>) | null = null;
 async function refreshNotifications() {
@@ -19,6 +19,8 @@ const STORAGE_KEYS: Record<string, string> = {
   [ITEMS_COLLECTION_ID]: "@fa_items",
   [RECOMMENDATIONS_COLLECTION_ID]: "@fa_recommendations",
   [VISIT_PHOTOS_COLLECTION_ID]: "@fa_visit_photos",
+  [INVENTORY_ITEMS_COLLECTION_ID]: "@fa_inventory_items",
+  [INVENTORY_BATCHES_COLLECTION_ID]: "@fa_inventory_batches",
 };
 const PENDING_QUEUE_KEY = "@fa_pending_queue";
 const LAST_SYNC_KEY = "@fa_last_sync";
@@ -54,6 +56,8 @@ const SYNCABLE_COLLECTIONS = [
   ITEMS_COLLECTION_ID,
   RECOMMENDATIONS_COLLECTION_ID,
   VISIT_PHOTOS_COLLECTION_ID,
+  INVENTORY_ITEMS_COLLECTION_ID,
+  INVENTORY_BATCHES_COLLECTION_ID,
 ];
 
 // ── In-memory cache ───────────────────────────────────────────────────────────

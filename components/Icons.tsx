@@ -159,3 +159,9 @@ export const WifiOff = createStrokeIcon(["M1 1l22 22", "M16.72 11.06A10.94 10.94
 export const CloudOff = createStrokeIcon(["M22.61 16.95A5 5 0 0 0 18 10h-1.26a8 8 0 0 0-7.05-6M5 5a8 8 0 0 0 4 15h9a5 5 0 0 0 1.7-.3", "M1 1l22 22"]);
 
 export const CloudCheck = createStrokeIcon(["M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z", "M9 13l2 2 4-4"]);
+
+export const TrendingUp = createStrokeIcon(["M23 6l-9.5 9.5-5-5L1 18", "M17 6h6v6"]);
+
+export const TrendingDown = createStrokeIcon(["M23 18l-9.5-9.5-5 5L1 6", "M17 18h6v-6"]);
+
+export const IndianRupee = createStrokeIcon(["M6 3h12", "M6 8h12", "M6 13l8.5 8", "M6 13h3", "M9 13c6.667 0 6.667-10 0-10"]);

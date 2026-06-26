@@ -3,7 +3,7 @@ import { useState, useCallback } from "react";
 import { useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArrowLeft, Search, Package, Tag, Beaker, Share2, Plus, X, Calendar, Clock } from "@/components/Icons";
-import { ITEMS_COLLECTION_ID } from "@/lib/appwrite";
+import { ITEMS_COLLECTION_ID, INVENTORY_ITEMS_COLLECTION_ID, INVENTORY_BATCHES_COLLECTION_ID } from "@/lib/appwrite";
 import { getCollection } from "@/lib/sync-manager";
 import { useNetwork } from "@/lib/network-provider";
 
@@ -14,6 +14,7 @@ interface Item {
   unit?: string;
   tallyCode?: string;
   expiryDate?: string;
+  earliestBatchExpiry?: Date | null; // FEFO: earliest batch expiry date
 }
 
 const categories = ["All", "Fertilizer", "Insecticide", "Fungicide", "Herbicide", "PGR", "Organic", "Micronutrient", "Other"];
@@ -45,6 +46,26 @@ const getCategoryIcon = (category: string | null | undefined) => {
   }
 };
 
+// Parse Tally date formats: "20250630", "30-06-2025", or ISO
+function parseBatchDate(dateStr: string): Date | null {
+  if (!dateStr || dateStr.trim() === "") return null;
+  const s = dateStr.trim();
+  if (/^\d{8}$/.test(s)) {
+    const y = parseInt(s.slice(0, 4));
+    const m = parseInt(s.slice(4, 6)) - 1;
+    const d = parseInt(s.slice(6, 8));
+    const dt = new Date(y, m, d);
+    return isNaN(dt.getTime()) ? null : dt;
+  }
+  const dmy = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+  if (dmy) {
+    const dt = new Date(parseInt(dmy[3]), parseInt(dmy[2]) - 1, parseInt(dmy[1]));
+    return isNaN(dt.getTime()) ? null : dt;
+  }
+  const dt = new Date(s);
+  return isNaN(dt.getTime()) ? null : dt;
+}
+
 export default function ProductCatalogScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -61,14 +82,39 @@ export default function ProductCatalogScreen() {
       const allItems = getCollection(ITEMS_COLLECTION_ID).sort((a, b) => 
         new Date(b.$createdAt).getTime() - new Date(a.$createdAt).getTime()
       );
-      setItems(allItems.map((d) => ({
-        $id: d.$id,
-        name: d.name,
-        category: d.category || undefined,
-        unit: d.unit || undefined,
-        tallyCode: d.tallyCode || undefined,
-        expiryDate: d.expiryDate || undefined,
-      })));
+
+      // Build a map of item name -> earliest batch expiry (FEFO)
+      const allInvItems = getCollection(INVENTORY_ITEMS_COLLECTION_ID);
+      const allBatches = getCollection(INVENTORY_BATCHES_COLLECTION_ID);
+      const invItemByName: Record<string, any> = {};
+      allInvItems.forEach((inv: any) => { invItemByName[inv.item_name?.toLowerCase()] = inv; });
+
+      const batchesByGuid: Record<string, Date[]> = {};
+      allBatches.forEach((b: any) => {
+        if (!b.expiry_date || !b.item_guid) return;
+        const d = parseBatchDate(b.expiry_date);
+        if (!d) return;
+        if (!batchesByGuid[b.item_guid]) batchesByGuid[b.item_guid] = [];
+        batchesByGuid[b.item_guid].push(d);
+      });
+
+      setItems(allItems.map((d) => {
+        const invItem = invItemByName[d.name?.toLowerCase()];
+        let earliestBatchExpiry: Date | null = null;
+        if (invItem && batchesByGuid[invItem.guid]?.length) {
+          const sorted = batchesByGuid[invItem.guid].slice().sort((a, b) => a.getTime() - b.getTime());
+          earliestBatchExpiry = sorted[0];
+        }
+        return {
+          $id: d.$id,
+          name: d.name,
+          category: d.category || undefined,
+          unit: d.unit || undefined,
+          tallyCode: d.tallyCode || undefined,
+          expiryDate: d.expiryDate || undefined,
+          earliestBatchExpiry,
+        };
+      }));
     } catch {}
     setLoading(false);
   }, []);
@@ -82,18 +128,33 @@ export default function ProductCatalogScreen() {
     setRefreshing(false);
   }, [fetchItems, syncNow]);
 
-  const filteredItems = items.filter((item) => {
-    if (selectedCategory !== "All" && item.category !== selectedCategory) return false;
-    if (search) {
-      const q = search.toLowerCase();
-      if (!item.name.toLowerCase().includes(q) && !(item.tallyCode || "").toLowerCase().includes(q)) return false;
-    }
-    if (expiryDays !== null && item.expiryDate) {
-      const daysUntil = Math.ceil((new Date(item.expiryDate).getTime() - Date.now()) / (1000 * 3600 * 24));
-      if (daysUntil > expiryDays || daysUntil < 0) return false;
-    }
-    return true;
-  });
+  // FEFO filter: filter by batch-level expiry (earliest expiring batch), falling back to item-level expiryDate
+  const filteredItems = items
+    .filter((item) => {
+      if (selectedCategory !== "All" && item.category !== selectedCategory) return false;
+      if (search) {
+        const q = search.toLowerCase();
+        if (!item.name.toLowerCase().includes(q) && !(item.tallyCode || "").toLowerCase().includes(q)) return false;
+      }
+      if (expiryDays !== null) {
+        // Prefer batch-level expiry; fall back to item-level
+        const expiryRef = item.earliestBatchExpiry ?? (item.expiryDate ? new Date(item.expiryDate) : null);
+        if (!expiryRef) return false; // filter active but no expiry data — exclude
+        const daysUntil = Math.ceil((expiryRef.getTime() - Date.now()) / (1000 * 3600 * 24));
+        if (daysUntil > expiryDays || daysUntil < 0) return false;
+      }
+      return true;
+    })
+    // When FEFO filter is active, sort by earliest expiry ascending
+    .sort((a, b) => {
+      if (!expiryDays) return 0; // default order when no filter
+      const aExp = a.earliestBatchExpiry ?? (a.expiryDate ? new Date(a.expiryDate) : null);
+      const bExp = b.earliestBatchExpiry ?? (b.expiryDate ? new Date(b.expiryDate) : null);
+      if (!aExp && !bExp) return 0;
+      if (!aExp) return 1;
+      if (!bExp) return -1;
+      return aExp.getTime() - bExp.getTime();
+    });
 
   const shareProductWhatsApp = (item: Item) => {
     const lines: string[] = [];

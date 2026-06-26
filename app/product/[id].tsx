@@ -4,8 +4,8 @@ import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArrowLeft, Package, Tag, Beaker, Hash, Calendar, Clock, Pencil, Check, X, Share2 } from "@/components/Icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import { ITEMS_COLLECTION_ID } from "@/lib/appwrite";
-import { getDocument, updateDocument } from "@/lib/sync-manager";
+import { ITEMS_COLLECTION_ID, INVENTORY_ITEMS_COLLECTION_ID, INVENTORY_BATCHES_COLLECTION_ID } from "@/lib/appwrite";
+import { getDocument, updateDocument, getCollection } from "@/lib/sync-manager";
 import { useNetwork } from "@/lib/network-provider";
 
 const categories = ["Fertilizer", "Insecticide", "Fungicide", "Herbicide", "PGR", "Organic", "Micronutrient", "Other"];
@@ -37,6 +37,46 @@ const getCategoryIcon = (category: string | null | undefined) => {
   }
 };
 
+interface InventoryBatch {
+  $id: string;
+  item_guid: string;
+  batch_no: string;
+  mfg_date?: string;
+  expiry_date?: string;
+  godown?: string;
+  qty: number;
+  rate: number;
+  value: number;
+  daysUntilExpiry?: number | null;
+}
+
+// Parse Tally date formats: "20250630" or "30-06-2025" or ISO
+function parseTallyDate(dateStr: string): Date | null {
+  if (!dateStr || dateStr.trim() === "") return null;
+  const s = dateStr.trim();
+  if (/^\d{8}$/.test(s)) {
+    const y = parseInt(s.slice(0, 4));
+    const m = parseInt(s.slice(4, 6)) - 1;
+    const d = parseInt(s.slice(6, 8));
+    const dt = new Date(y, m, d);
+    return isNaN(dt.getTime()) ? null : dt;
+  }
+  const dmy = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+  if (dmy) {
+    const dt = new Date(parseInt(dmy[3]), parseInt(dmy[2]) - 1, parseInt(dmy[1]));
+    return isNaN(dt.getTime()) ? null : dt;
+  }
+  const dt = new Date(s);
+  return isNaN(dt.getTime()) ? null : dt;
+}
+
+function formatDisplayDate(dateStr: string): string {
+  if (!dateStr) return "—";
+  const d = parseTallyDate(dateStr);
+  if (!d) return dateStr;
+  return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+}
+
 export default function ProductDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
@@ -46,6 +86,8 @@ export default function ProductDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [product, setProduct] = useState<any>(null);
+  const [inventoryItem, setInventoryItem] = useState<any>(null);
+  const [batches, setBatches] = useState<InventoryBatch[]>([]);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -68,6 +110,46 @@ export default function ProductDetailScreen() {
         setEditUnit(doc.unit || "");
         setEditTallyCode(doc.tallyCode || "");
         setEditExpiryDate(doc.expiryDate || "");
+
+        const allInvItems = getCollection(INVENTORY_ITEMS_COLLECTION_ID);
+        let invItem: any = null;
+        if (doc.tallyCode) {
+          invItem = allInvItems.find((i: any) => i.item_name === doc.name || i.guid === doc.tallyCode);
+        }
+        if (!invItem) {
+          invItem = allInvItems.find((i: any) => i.item_name?.toLowerCase() === doc.name?.toLowerCase());
+        }
+        setInventoryItem(invItem || null);
+
+        if (invItem) {
+          const allBatches = getCollection(INVENTORY_BATCHES_COLLECTION_ID);
+          const itemBatches = allBatches
+            .filter((b: any) => b.item_guid === invItem.guid)
+            .map((b: any) => {
+              let daysUntilExpiry: number | null = null;
+              if (b.expiry_date) {
+                const parsed = parseTallyDate(b.expiry_date);
+                if (parsed) {
+                  daysUntilExpiry = Math.ceil((parsed.getTime() - Date.now()) / (1000 * 3600 * 24));
+                }
+              }
+              return { ...b, daysUntilExpiry };
+            })
+            .sort((a: any, b: any) => {
+              if (!a.expiry_date && !b.expiry_date) return 0;
+              if (!a.expiry_date) return 1;
+              if (!b.expiry_date) return -1;
+              const aDate = parseTallyDate(a.expiry_date);
+              const bDate = parseTallyDate(b.expiry_date);
+              if (!aDate && !bDate) return 0;
+              if (!aDate) return 1;
+              if (!bDate) return -1;
+              return aDate.getTime() - bDate.getTime();
+            });
+          setBatches(itemBatches);
+        } else {
+          setBatches([]);
+        }
       }
     } catch {}
     setLoading(false);
@@ -137,15 +219,24 @@ export default function ProductDetailScreen() {
     const lines: string[] = [];
     lines.push("📦 *Product Details*");
     lines.push("");
-    lines.push(`📛 *Name:* ${product.name}`);
-    if (product.category) lines.push(`🏷️ *Category:* ${product.category}`);
-    if (product.unit) lines.push(`🧪 *Unit:* ${product.unit}`);
-    if (product.tallyCode) lines.push(`🔢 *Tally Code:* ${product.tallyCode}`);
-    if (product.expiryDate) {
-      const daysUntil = Math.ceil((new Date(product.expiryDate).getTime() - Date.now()) / (1000 * 3600 * 24));
-      lines.push(`📅 *Expiry:* ${new Date(product.expiryDate).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })} (${daysUntil < 0 ? "Expired" : `${daysUntil} days left`})`);
+    lines.push("📛 *Name:* " + product.name);
+    if (product.category) lines.push("🏷️ *Category:* " + product.category);
+    if (product.unit) lines.push("🧪 *Unit:* " + product.unit);
+    if (product.tallyCode) lines.push("🔢 *Tally Code:* " + product.tallyCode);
+    if (inventoryItem) {
+      if (inventoryItem.closing_qty) lines.push("📦 *Stock:* " + inventoryItem.closing_qty);
+      if (inventoryItem.closing_value) lines.push("💰 *Value:* ₹" + Number(inventoryItem.closing_value).toLocaleString("en-IN"));
     }
-    Linking.openURL(`https://wa.me/?text=${encodeURIComponent(lines.join("\n"))}`);
+    if (batches.length > 0) {
+      lines.push("\n🗃️ *Batches (" + batches.length + "):*");
+      batches.slice(0, 5).forEach((b) => {
+        let bLine = "  • " + b.batch_no;
+        if (b.qty) bLine += " — Qty: " + b.qty;
+        if (b.expiry_date) bLine += " — Exp: " + formatDisplayDate(b.expiry_date);
+        lines.push(bLine);
+      });
+    }
+    Linking.openURL("https://wa.me/?text=" + encodeURIComponent(lines.join("\n")));
   };
 
   const formatDate = (dateStr: string) => {
@@ -177,6 +268,11 @@ export default function ProductDetailScreen() {
   const daysUntilExpiry = product.expiryDate ? Math.ceil((new Date(product.expiryDate).getTime() - Date.now()) / (1000 * 3600 * 24)) : null;
   const isExpired = daysUntilExpiry !== null && daysUntilExpiry < 0;
   const isUrgent = daysUntilExpiry !== null && daysUntilExpiry >= 0 && daysUntilExpiry <= 30;
+
+  const openingQty = inventoryItem?.opening_qty;
+  const closingQty = inventoryItem?.closing_qty;
+  const openingValue = inventoryItem?.opening_value;
+  const closingValue = inventoryItem?.closing_value;
 
   return (
     <View style={styles.outerContainer}>
@@ -276,7 +372,7 @@ export default function ProductDetailScreen() {
                 <View style={[styles.expiryBadge, isExpired && styles.expiryBadgeExpired, isUrgent && styles.expiryBadgeUrgent]}>
                   <Clock color={isExpired ? "#dc2626" : isUrgent ? "#f59e0b" : "#16a34a"} size={12} />
                   <Text style={[styles.expiryBadgeText, isExpired && styles.expiryBadgeTextExpired, isUrgent && styles.expiryBadgeTextUrgent]}>
-                    {isExpired ? "Expired" : `${daysUntilExpiry} days left`}
+                    {isExpired ? "Expired" : daysUntilExpiry + " days left"}
                   </Text>
                 </View>
               ) : null}
@@ -319,13 +415,146 @@ export default function ProductDetailScreen() {
                     <View style={[styles.expiryBadge, isExpired && styles.expiryBadgeExpired, isUrgent && styles.expiryBadgeUrgent]}>
                       <Clock color={isExpired ? "#dc2626" : isUrgent ? "#f59e0b" : "#16a34a"} size={9} />
                       <Text style={[styles.expiryBadgeText, isExpired && styles.expiryBadgeTextExpired, isUrgent && styles.expiryBadgeTextUrgent]}>
-                        {isExpired ? "Expired" : `${daysUntilExpiry}d`}
+                        {isExpired ? "Expired" : daysUntilExpiry + "d"}
                       </Text>
                     </View>
                   </View>
                 </View>
               )}
             </View>
+
+            {inventoryItem && (
+              <View style={styles.card}>
+                <Text style={styles.sectionTitle}>📊 Stock Levels</Text>
+                <View style={styles.stockGrid}>
+                  <View style={styles.stockCard}>
+                    <Text style={styles.stockCardLabel}>Opening Qty</Text>
+                    <Text style={styles.stockCardValue}>{openingQty || "—"}</Text>
+                    {openingValue ? (
+                      <Text style={styles.stockCardSub}>₹{Number(openingValue).toLocaleString("en-IN", { maximumFractionDigits: 0 })}</Text>
+                    ) : null}
+                  </View>
+                  <View style={[styles.stockCard, styles.stockCardHighlight]}>
+                    <Text style={styles.stockCardLabel}>Closing Qty</Text>
+                    <Text style={[styles.stockCardValue, styles.stockCardValueGreen]}>{closingQty || "—"}</Text>
+                    {closingValue ? (
+                      <Text style={styles.stockCardSub}>₹{Number(closingValue).toLocaleString("en-IN", { maximumFractionDigits: 0 })}</Text>
+                    ) : null}
+                  </View>
+                </View>
+                {inventoryItem.stock_group ? (
+                  <View style={styles.stockGroupRow}>
+                    <Text style={styles.stockGroupLabel}>Group:</Text>
+                    <Text style={styles.stockGroupValue}>{inventoryItem.stock_group}</Text>
+                  </View>
+                ) : null}
+              </View>
+            )}
+
+            {batches.length > 0 && (
+              <View style={styles.card}>
+                <View style={styles.batchHeaderRow}>
+                  <Text style={styles.sectionTitle}>🗃️ Batches ({batches.length})</Text>
+                  <View style={styles.fefoBadge}>
+                    <Text style={styles.fefoBadgeText}>FEFO</Text>
+                  </View>
+                </View>
+                <Text style={styles.fefoHint}>Sorted: earliest expiry first</Text>
+                {batches.map((batch, idx) => {
+                  const isExpiredBatch = batch.daysUntilExpiry !== null && batch.daysUntilExpiry !== undefined && batch.daysUntilExpiry < 0;
+                  const isUrgentBatch = batch.daysUntilExpiry !== null && batch.daysUntilExpiry !== undefined && batch.daysUntilExpiry >= 0 && batch.daysUntilExpiry <= 30;
+                  return (
+                    <View
+                      key={batch.$id}
+                      style={[
+                        styles.batchCard,
+                        idx < batches.length - 1 && styles.batchCardBorder,
+                        isExpiredBatch && styles.batchCardExpired,
+                        isUrgentBatch && styles.batchCardUrgent,
+                      ]}
+                    >
+                      <View style={styles.batchTopRow}>
+                        <View style={styles.batchNoWrap}>
+                          <Text style={styles.batchNoLabel}>Batch</Text>
+                          <Text style={styles.batchNo}>{batch.batch_no}</Text>
+                        </View>
+                        {batch.expiry_date ? (
+                          <View style={[
+                            styles.batchExpiryBadge,
+                            isExpiredBatch && styles.batchExpiryBadgeExpired,
+                            isUrgentBatch && styles.batchExpiryBadgeUrgent,
+                          ]}>
+                            <Clock
+                              color={isExpiredBatch ? "#dc2626" : isUrgentBatch ? "#b45309" : "#16a34a"}
+                              size={10}
+                            />
+                            <Text style={[
+                              styles.batchExpiryBadgeText,
+                              isExpiredBatch && { color: "#dc2626" },
+                              isUrgentBatch && { color: "#b45309" },
+                            ]}>
+                              {isExpiredBatch
+                                ? "Expired " + Math.abs(batch.daysUntilExpiry!) + "d ago"
+                                : batch.daysUntilExpiry === 0
+                                  ? "Expires today"
+                                  : batch.daysUntilExpiry + "d left"}
+                            </Text>
+                          </View>
+                        ) : null}
+                      </View>
+
+                      <View style={styles.batchDetails}>
+                        {batch.expiry_date ? (
+                          <View style={styles.batchDetailItem}>
+                            <Text style={styles.batchDetailKey}>Expiry</Text>
+                            <Text style={[styles.batchDetailVal, isExpiredBatch && { color: "#dc2626" }]}>
+                              {formatDisplayDate(batch.expiry_date)}
+                            </Text>
+                          </View>
+                        ) : null}
+                        {batch.mfg_date ? (
+                          <View style={styles.batchDetailItem}>
+                            <Text style={styles.batchDetailKey}>Mfg</Text>
+                            <Text style={styles.batchDetailVal}>{formatDisplayDate(batch.mfg_date)}</Text>
+                          </View>
+                        ) : null}
+                        {batch.qty !== undefined && batch.qty !== null && (
+                          <View style={styles.batchDetailItem}>
+                            <Text style={styles.batchDetailKey}>Qty</Text>
+                            <Text style={styles.batchDetailVal}>{batch.qty} {inventoryItem?.base_unit || ""}</Text>
+                          </View>
+                        )}
+                        {batch.rate ? (
+                          <View style={styles.batchDetailItem}>
+                            <Text style={styles.batchDetailKey}>Rate</Text>
+                            <Text style={styles.batchDetailVal}>₹{Number(batch.rate).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</Text>
+                          </View>
+                        ) : null}
+                        {batch.value ? (
+                          <View style={styles.batchDetailItem}>
+                            <Text style={styles.batchDetailKey}>Value</Text>
+                            <Text style={styles.batchDetailVal}>₹{Number(batch.value).toLocaleString("en-IN", { maximumFractionDigits: 0 })}</Text>
+                          </View>
+                        ) : null}
+                        {batch.godown ? (
+                          <View style={styles.batchDetailItem}>
+                            <Text style={styles.batchDetailKey}>Godown</Text>
+                            <Text style={styles.batchDetailVal}>{batch.godown}</Text>
+                          </View>
+                        ) : null}
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            )}
+
+            {inventoryItem && batches.length === 0 && (
+              <View style={styles.card}>
+                <Text style={styles.sectionTitle}>🗃️ Batches</Text>
+                <Text style={styles.noBatchText}>No batch records found for this item</Text>
+              </View>
+            )}
 
             <View style={styles.card}>
               <Text style={styles.sectionTitle}>Quick Actions</Text>
@@ -364,7 +593,7 @@ const styles = StyleSheet.create({
   categoryBadge: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 10, paddingVertical: 3, borderRadius: 12 },
   categoryBadgeText: { fontSize: 12, fontWeight: "600" },
   card: { backgroundColor: "#fff", borderRadius: 14, padding: 16, borderWidth: 1, borderColor: "#e5e7eb", gap: 10 },
-  sectionTitle: { fontSize: 14, fontWeight: "600", color: "#1a1a2e", marginBottom: 8 },
+  sectionTitle: { fontSize: 14, fontWeight: "600", color: "#1a1a2e", marginBottom: 2 },
   detailRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: "#f3f4f6" },
   detailLabel: { fontSize: 13, color: "#6b7280", flex: 1 },
   detailValue: { fontSize: 14, fontWeight: "500", color: "#1a1a2e" },
@@ -386,4 +615,35 @@ const styles = StyleSheet.create({
   expiryBadgeText: { fontSize: 10, fontWeight: "600", color: "#16a34a" },
   expiryBadgeTextExpired: { color: "#dc2626" },
   expiryBadgeTextUrgent: { color: "#b45309" },
+  stockGrid: { flexDirection: "row", gap: 10 },
+  stockCard: { flex: 1, backgroundColor: "#f9fafb", borderRadius: 12, padding: 12, borderWidth: 1, borderColor: "#e5e7eb", gap: 3 },
+  stockCardHighlight: { backgroundColor: "#ecfdf5", borderColor: "#bbf7d0" },
+  stockCardLabel: { fontSize: 11, color: "#9ca3af", fontWeight: "500" },
+  stockCardValue: { fontSize: 16, fontWeight: "700", color: "#1a1a2e" },
+  stockCardValueGreen: { color: "#16a34a" },
+  stockCardSub: { fontSize: 11, color: "#6b7280", fontWeight: "500" },
+  stockGroupRow: { flexDirection: "row", alignItems: "center", gap: 6, paddingTop: 4 },
+  stockGroupLabel: { fontSize: 12, color: "#9ca3af", fontWeight: "500" },
+  stockGroupValue: { fontSize: 12, color: "#6b7280", fontWeight: "500" },
+  batchHeaderRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  fefoBadge: { backgroundColor: "#ede9fe", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
+  fefoBadgeText: { fontSize: 10, fontWeight: "700", color: "#7c3aed", letterSpacing: 0.5 },
+  fefoHint: { fontSize: 11, color: "#9ca3af", marginTop: -6, marginBottom: 4 },
+  batchCard: { paddingVertical: 10, gap: 8 },
+  batchCardBorder: { borderBottomWidth: 1, borderBottomColor: "#f3f4f6" },
+  batchCardExpired: { backgroundColor: "#fef2f2", borderRadius: 10, padding: 10, marginHorizontal: -4, borderWidth: 1, borderColor: "#fecdd3" },
+  batchCardUrgent: { backgroundColor: "#fffbeb", borderRadius: 10, padding: 10, marginHorizontal: -4, borderWidth: 1, borderColor: "#fde68a" },
+  batchTopRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  batchNoWrap: { gap: 1 },
+  batchNoLabel: { fontSize: 10, color: "#9ca3af", fontWeight: "500" },
+  batchNo: { fontSize: 13, fontWeight: "700", color: "#1a1a2e", fontFamily: "monospace" },
+  batchExpiryBadge: { flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 7, paddingVertical: 3, borderRadius: 8, backgroundColor: "#dcfce7" },
+  batchExpiryBadgeExpired: { backgroundColor: "#fecdd3" },
+  batchExpiryBadgeUrgent: { backgroundColor: "#fef3c7" },
+  batchExpiryBadgeText: { fontSize: 10, fontWeight: "600", color: "#16a34a" },
+  batchDetails: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  batchDetailItem: { gap: 1, minWidth: 80 },
+  batchDetailKey: { fontSize: 10, color: "#9ca3af", fontWeight: "500" },
+  batchDetailVal: { fontSize: 12, fontWeight: "600", color: "#374151" },
+  noBatchText: { fontSize: 13, color: "#9ca3af", textAlign: "center", paddingVertical: 8 },
 });
