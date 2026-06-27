@@ -4,7 +4,7 @@ import { useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArrowLeft, Search, Package, Tag, Beaker, Share2, Plus, X, Calendar, Clock } from "@/components/Icons";
 import { ITEMS_COLLECTION_ID, INVENTORY_ITEMS_COLLECTION_ID, INVENTORY_BATCHES_COLLECTION_ID } from "@/lib/appwrite";
-import { getCollection } from "@/lib/sync-manager";
+import { getCollection, syncInventoryCollections } from "@/lib/sync-manager";
 import { useNetwork } from "@/lib/network-provider";
 
 interface Item {
@@ -119,11 +119,16 @@ export default function ProductCatalogScreen() {
     setLoading(false);
   }, []);
 
-  useFocusEffect(useCallback(() => { fetchItems(); }, [fetchItems]));
+  useFocusEffect(useCallback(() => {
+    fetchItems();
+    // Sync inventory in background so batch expiry data is fresh for FEFO filter
+    syncInventoryCollections().then(fetchItems).catch(() => {});
+  }, [fetchItems]));
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await syncNow();
+    await syncInventoryCollections();
     await fetchItems();
     setRefreshing(false);
   }, [fetchItems, syncNow]);

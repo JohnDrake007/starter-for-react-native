@@ -5,7 +5,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArrowLeft, Package, Tag, Beaker, Hash, Calendar, Clock, Pencil, Check, X, Share2 } from "@/components/Icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { ITEMS_COLLECTION_ID, INVENTORY_ITEMS_COLLECTION_ID, INVENTORY_BATCHES_COLLECTION_ID } from "@/lib/appwrite";
-import { getDocument, updateDocument, getCollection } from "@/lib/sync-manager";
+import { getDocument, updateDocument, getCollection, syncInventoryCollections } from "@/lib/sync-manager";
 import { useNetwork } from "@/lib/network-provider";
 
 const categories = ["Fertilizer", "Insecticide", "Fungicide", "Herbicide", "PGR", "Organic", "Micronutrient", "Other"];
@@ -155,11 +155,16 @@ export default function ProductDetailScreen() {
     setLoading(false);
   }, [id]);
 
-  useFocusEffect(useCallback(() => { loadData(); }, [loadData]));
+  useFocusEffect(useCallback(() => {
+    loadData();
+    // Trigger inventory sync in background on focus so batch data is fresh
+    syncInventoryCollections().then(loadData).catch(() => {});
+  }, [loadData]));
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await syncNow();
+    await syncInventoryCollections();
     await loadData();
     setRefreshing(false);
   }, [loadData, syncNow]);

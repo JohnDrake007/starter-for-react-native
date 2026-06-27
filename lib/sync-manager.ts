@@ -56,6 +56,10 @@ const SYNCABLE_COLLECTIONS = [
   ITEMS_COLLECTION_ID,
   RECOMMENDATIONS_COLLECTION_ID,
   VISIT_PHOTOS_COLLECTION_ID,
+];
+
+// ── Inventory collections — pulled separately (large, optional) ────────────────
+const INVENTORY_COLLECTIONS = [
   INVENTORY_ITEMS_COLLECTION_ID,
   INVENTORY_BATCHES_COLLECTION_ID,
 ];
@@ -101,11 +105,21 @@ async function persistQueue() {
 export async function initSync(): Promise<void> {
   if (initialized) return;
   try {
-    // Load all collections from disk
+    // Load core collections from disk
     for (const collectionId of SYNCABLE_COLLECTIONS) {
       const key = STORAGE_KEYS[collectionId];
       const raw = await AsyncStorage.getItem(key);
       cache[collectionId] = raw ? JSON.parse(raw) : [];
+    }
+    // Also load any previously-cached inventory data
+    for (const collectionId of INVENTORY_COLLECTIONS) {
+      const key = STORAGE_KEYS[collectionId];
+      if (key) {
+        try {
+          const raw = await AsyncStorage.getItem(key);
+          cache[collectionId] = raw ? JSON.parse(raw) : [];
+        } catch {}
+      }
     }
     // Load pending queue
     const rawQueue = await AsyncStorage.getItem(PENDING_QUEUE_KEY);
@@ -430,6 +444,26 @@ async function pullAllCollections(): Promise<void> {
     } catch (e) {
       console.warn(`[SyncManager] Pull failed for ${collectionId}:`, e);
       // Keep existing local data on failure — offline resilience
+    }
+  }
+}
+
+/**
+ * Sync inventory_items and inventory_batches on-demand.
+ * Called from product screens — does NOT block the main syncNow cycle.
+ */
+export async function syncInventoryCollections(): Promise<void> {
+  for (const collectionId of INVENTORY_COLLECTIONS) {
+    try {
+      const res = await databases.listDocuments(DATABASE_ID, collectionId, [
+        Query.limit(5000),
+        Query.orderDesc("$createdAt"),
+      ]);
+      cache[collectionId] = res.documents as any[];
+      await persistCollection(collectionId);
+    } catch (e) {
+      console.warn(`[SyncManager] Inventory pull failed for ${collectionId}:`, e);
+      // Non-fatal — keep cached data
     }
   }
 }
