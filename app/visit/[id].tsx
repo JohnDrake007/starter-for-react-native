@@ -113,11 +113,10 @@ export default function VisitDetailScreen() {
 
   // Recommendations editing state
   const [editRecs, setEditRecs] = useState<Recommendation[]>([]);
-  const [deletedRecIds, setDeletedRecIds] = useState<string[]>([]);
   const [itemSearch, setItemSearch] = useState("");
-  const [showCustomItem, setShowCustomItem] = useState(false);
+  const [showCustomItem, setShowCustomItem] = useState<string | false>(false); // markerId of open section
   const [customItemName, setCustomItemName] = useState("");
-  const [showItemSearch, setShowItemSearch] = useState(false);
+  const [showItemSearch, setShowItemSearch] = useState<string | false>(false); // markerId of open section
 
   // Ref guards to prevent DateTimePicker double-fire on Android
   const editVisitDatePickerHandled = useRef(false);
@@ -149,7 +148,15 @@ export default function VisitDetailScreen() {
       } catch {}
 
       try {
-        const recsRes = getCollection(RECOMMENDATIONS_COLLECTION_ID).filter((r: any) => r.visitId === id);
+        const recsRes = getCollection(RECOMMENDATIONS_COLLECTION_ID)
+          .filter((r: any) => r.visitId === id)
+          // Cache is stored newest-first (createDocument unshifts; server pulls orderDesc).
+          // Section decoding requires creation order (markers before their products), so sort ascending.
+          .sort((a: any, b: any) => {
+            const ta = a.$createdAt ? new Date(a.$createdAt).getTime() : 0;
+            const tb = b.$createdAt ? new Date(b.$createdAt).getTime() : 0;
+            return ta - tb;
+          });
 
         // Build item name map
         const itemMap: Record<string, { name: string; category?: string; unit?: string }> = {};
@@ -233,7 +240,6 @@ export default function VisitDetailScreen() {
     setNewPhotos([]);
     setDeletedPhotoIds([]);
     setEditRecs([...recommendations]);
-    setDeletedRecIds([]);
     setItemSearch("");
     setShowCustomItem(false);
     setCustomItemName("");
@@ -244,7 +250,6 @@ export default function VisitDetailScreen() {
   const cancelEditing = () => {
     setEditing(false);
     setDeletedPhotoIds([]);
-    setDeletedRecIds([]);
   };
 
   const captureGPS = async () => {
@@ -364,11 +369,6 @@ export default function VisitDetailScreen() {
   };
 
   const removeEditRec = (idx: number) => {
-    const rec = editRecs[idx];
-    // If it's an existing record (not newly added), mark for deletion
-    if (!rec.$id.startsWith("new_")) {
-      setDeletedRecIds((prev) => [...prev, rec.$id]);
-    }
     setEditRecs((prev) => prev.filter((_, i) => i !== idx));
   };
 
@@ -430,24 +430,41 @@ export default function VisitDetailScreen() {
         }
       }
 
-      // 4. Handle deleted recommendations
-      for (const recId of deletedRecIds) {
-        try {
-          await deleteDocument(RECOMMENDATIONS_COLLECTION_ID, recId);
-        } catch (e) {
-          console.warn("Failed to delete recommendation:", e);
-        }
-      }
+      // 4 & 5. Rebuild recommendations only if the prescription changed.
+      // We delete + recreate the whole set in on-screen order so that $createdAt
+      // ordering always matches the section/product order (the cache is read back
+      // sorted by $createdAt). This also persists section title/note edits and
+      // products added into a specific section, which an in-place diff would miss.
+      const recSignature = (recs: Recommendation[]) =>
+        recs
+          .map((r) =>
+            r.isSectionMarker
+              ? `H|${r.sectionTitle || ""}|${r.sectionNote || ""}`
+              : `P|${r.itemId || ""}|${r.customItem || ""}|${r.dosage || ""}|${r.quantity || ""}|${r.notes || ""}`
+          )
+          .join("\n");
 
-      // 5. Update existing recommendations & create new ones
-      for (const rec of editRecs) {
-        if (rec.$id.startsWith("new_")) {
-          // New recommendation — create it
+      const currentEditRecs = editRecs.filter((r) => !r._deleted);
+      if (recSignature(recommendations) !== recSignature(currentEditRecs)) {
+        // Delete every existing recommendation for this visit
+        for (const orig of recommendations) {
+          try {
+            await deleteDocument(RECOMMENDATIONS_COLLECTION_ID, orig.$id);
+          } catch (e) {
+            console.warn("Failed to delete recommendation:", e);
+          }
+        }
+        // Recreate the full set in order
+        for (const rec of currentEditRecs) {
           try {
             await createDocument(RECOMMENDATIONS_COLLECTION_ID, {
               visitId: id,
-              itemId: rec.isCustom ? undefined : rec.itemId,
-              customItem: rec.isCustom ? rec.customItem : undefined,
+              itemId: rec.isSectionMarker ? undefined : rec.isCustom ? undefined : rec.itemId,
+              customItem: rec.isSectionMarker
+                ? `§HDR§${rec.sectionTitle || ""}§${rec.sectionNote || ""}`
+                : rec.isCustom
+                ? rec.customItem
+                : undefined,
               dosage: rec.dosage || undefined,
               quantity: rec.quantity || undefined,
               notes: rec.notes || undefined,
@@ -455,28 +472,11 @@ export default function VisitDetailScreen() {
           } catch (e) {
             console.warn("Failed to create recommendation:", e);
           }
-        } else {
-          // Existing recommendation — check if dosage/quantity/notes changed
-          const original = recommendations.find((r) => r.$id === rec.$id);
-          if (original) {
-            const changed: any = {};
-            if (rec.dosage !== original.dosage) changed.dosage = rec.dosage || undefined;
-            if (rec.quantity !== original.quantity) changed.quantity = rec.quantity || undefined;
-            if (rec.notes !== original.notes) changed.notes = rec.notes || undefined;
-            if (Object.keys(changed).length > 0) {
-              try {
-                await updateDocument(RECOMMENDATIONS_COLLECTION_ID, rec.$id, changed);
-              } catch (e) {
-                console.warn("Failed to update recommendation:", e);
-              }
-            }
-          }
         }
       }
 
       setNewPhotos([]);
       setDeletedPhotoIds([]);
-      setDeletedRecIds([]);
       setEditing(false);
       await loadData();
     } catch (e: any) {
@@ -810,125 +810,240 @@ export default function VisitDetailScreen() {
                 <Text style={styles.cardTitle}>Recommended Products ({editRecs.length})</Text>
               </View>
 
-              {/* Product search */}
-              {showItemSearch ? (
-                <View style={{ gap: 8 }}>
-                  <View style={styles.searchBox}>
-                    <Search color="#9ca3af" size={14} />
-                    <TextInput
-                      style={styles.searchInput}
-                      placeholder="Search products..."
-                      placeholderTextColor="#9ca3af"
-                      value={itemSearch}
-                      onChangeText={setItemSearch}
-                      autoFocus
-                    />
-                    <TouchableOpacity onPress={() => { setShowItemSearch(false); setItemSearch(""); }}>
-                      <X color="#9ca3af" size={14} />
-                    </TouchableOpacity>
-                  </View>
-                  {itemSearch.length > 0 && filteredItems.map((item) => (
-                    <TouchableOpacity key={item.$id} style={styles.itemRow} onPress={() => addItemToRecs(item)}>
-                      <Package color="#16a34a" size={14} />
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.itemName}>{item.name}</Text>
-                        {item.category && <Text style={styles.itemCategory}>{item.category}{item.unit ? ` · ${item.unit}` : ""}</Text>}
-                      </View>
-                      <PlusCircle color="#16a34a" size={16} />
-                    </TouchableOpacity>
-                  ))}
-                  {itemSearch.length > 0 && filteredItems.length === 0 && (
-                    <Text style={styles.emptyText}>No products found</Text>
-                  )}
-                </View>
-              ) : null}
 
-              {/* Custom item input */}
-              {showCustomItem ? (
-                <View style={styles.customItemRow}>
-                  <TextInput
-                    style={[styles.editInput, { flex: 1 }]}
-                    placeholder="Enter custom product name"
-                    placeholderTextColor="#9ca3af"
-                    value={customItemName}
-                    onChangeText={setCustomItemName}
-                  />
-                  <TouchableOpacity style={styles.customAddBtn} onPress={addCustomRec}>
-                    <Text style={styles.customAddBtnText}>Add</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.customCancelBtn} onPress={() => { setShowCustomItem(false); setCustomItemName(""); }}>
-                    <X color="#6b7280" size={16} />
-                  </TouchableOpacity>
-                </View>
-              ) : null}
+              {/* Section-aware editable rec list */}
+              {(() => {
 
-              {/* Add buttons */}
-              {!showItemSearch && !showCustomItem && (
-                <View style={styles.addRecRow}>
-                  <TouchableOpacity style={styles.addRecBtn} onPress={() => setShowItemSearch(true)}>
-                    <Search color="#16a34a" size={14} />
-                    <Text style={styles.addRecBtnText}>Search Products</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.addRecBtn} onPress={() => setShowCustomItem(true)}>
-                    <PlusCircle color="#16a34a" size={14} />
-                    <Text style={styles.addRecBtnText}>Custom Item</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-
-              {/* Editable rec list */}
-              {editRecs.length === 0 ? (
-                <Text style={styles.emptyText}>No products added yet</Text>
-              ) : (
-                editRecs.map((rec, idx) => (
-                  <View key={rec.$id} style={[styles.editRecCard, idx < editRecs.length - 1 && styles.editRecCardBorder]}>
-                    <View style={styles.editRecHeader}>
-                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flex: 1 }}>
-                        <View style={[styles.recIcon, { backgroundColor: "#dcfce7" }]}>
-                          <Package color="#16a34a" size={12} />
+                const editSections = decodeToPrescription(editRecs.filter(r => !r._deleted));
+                return editSections.length === 0 ? (
+                  <Text style={styles.emptyText}>No products added yet</Text>
+                ) : (
+                  editSections.map((sec, secIdx) => (
+                    <View key={sec.markerId} style={[styles.editSection, secIdx > 0 && styles.editSectionGap]}>
+                      {/* Section header */}
+                      <View style={styles.editSectionHeader}>
+                        <View style={styles.editSectionIndexBadge}>
+                          <Text style={styles.editSectionIndexText}>{secIdx + 1}</Text>
                         </View>
-                        <Text style={styles.recName} numberOfLines={1}>{rec.name}</Text>
-                        {rec.isCustom && <View style={styles.customBadge}><Text style={styles.customBadgeText}>Custom</Text></View>}
-                        {rec.$id.startsWith("new_") && <View style={styles.newBadge}><Text style={styles.newBadgeText}>NEW</Text></View>}
-                      </View>
-                      <TouchableOpacity onPress={() => removeEditRec(idx)} style={styles.recDeleteBtn}>
-                        <Trash2 color="#dc2626" size={14} />
-                      </TouchableOpacity>
-                    </View>
-                    {rec.category && <Text style={styles.recCategory}>{rec.category}</Text>}
-                    <View style={styles.recEditFields}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.fieldLabel}>Dosage</Text>
                         <TextInput
-                          style={styles.fieldInput}
-                          placeholder={rec.unit ? `e.g. 5 ${rec.unit}/L` : "e.g. 2ml/L"}
+                          style={styles.editSectionTitleInput}
+                          value={sec.title}
+                          onChangeText={(val) => {
+                            setEditRecs(prev => prev.map(r =>
+                              r.$id === sec.markerId
+                                ? { ...r, sectionTitle: val.toUpperCase(), customItem: `§HDR§${val.toUpperCase()}§${sec.sectionNote}` }
+                                : r
+                            ));
+                          }}
+                          placeholder="SECTION TITLE"
                           placeholderTextColor="#9ca3af"
-                          value={rec.dosage}
-                          onChangeText={(t) => updateEditRec(idx, "dosage", t)}
+                          autoCapitalize="characters"
                         />
+                        {editSections.length > 1 && (
+                          <TouchableOpacity
+                            onPress={() => {
+                              // Remove the section marker + all its products
+                              const toDelete = [sec.markerId, ...sec.products.map(p => p.$id)];
+                              setEditRecs(prev => prev.filter(r => !toDelete.includes(r.$id)));
+                            }}
+                            style={styles.editSectionDeleteBtn}
+                          >
+                            <X color="#dc2626" size={14} />
+                          </TouchableOpacity>
+                        )}
                       </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.fieldLabel}>Quantity</Text>
-                        <TextInput
-                          style={styles.fieldInput}
-                          placeholder="e.g. 500ml"
-                          placeholderTextColor="#9ca3af"
-                          value={rec.quantity}
-                          onChangeText={(t) => updateEditRec(idx, "quantity", t)}
-                        />
+                      {/* Section note */}
+                      <TextInput
+                        style={styles.editSectionNoteInput}
+                        value={sec.sectionNote}
+                        onChangeText={(val) => {
+                          setEditRecs(prev => prev.map(r =>
+                            r.$id === sec.markerId
+                              ? { ...r, sectionNote: val, customItem: `§HDR§${sec.title}§${val}` }
+                              : r
+                          ));
+                        }}
+                        placeholder="Section note (e.g. Mix with 200L water)"
+                        placeholderTextColor="#9ca3af"
+                      />
+                      {/* Products in this section */}
+                      {sec.products.map((rec, idx) => (
+                        <View key={rec.$id} style={[styles.editRecCard, idx < sec.products.length - 1 && styles.editRecCardBorder]}>
+                          <View style={styles.editRecHeader}>
+                            <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flex: 1 }}>
+                              <View style={[styles.recIcon, { backgroundColor: "#dcfce7" }]}>
+                                <Package color="#16a34a" size={12} />
+                              </View>
+                              <Text style={styles.recName} numberOfLines={1}>{rec.name}</Text>
+                              {rec.isCustom && <View style={styles.customBadge}><Text style={styles.customBadgeText}>Custom</Text></View>}
+                              {rec.$id.startsWith("new_") && <View style={styles.newBadge}><Text style={styles.newBadgeText}>NEW</Text></View>}
+                            </View>
+                            <TouchableOpacity
+                              onPress={() => {
+                                setEditRecs(prev => prev.filter(r => r.$id !== rec.$id));
+                              }}
+                              style={styles.recDeleteBtn}
+                            >
+                              <Trash2 color="#dc2626" size={14} />
+                            </TouchableOpacity>
+                          </View>
+                          {rec.category && <Text style={styles.recCategory}>{rec.category}</Text>}
+                          {/* Dosage (the per-item optional note) — larger, full-width */}
+                          <Text style={styles.fieldLabel}>Dosage</Text>
+                          <TextInput
+                            style={[styles.fieldInput, styles.fieldInputLarge]}
+                            placeholder={rec.unit ? `e.g. 5 ${rec.unit}/L` : "e.g. 2ml/L"}
+                            placeholderTextColor="#9ca3af"
+                            value={rec.notes}
+                            onChangeText={(t) => {
+                              setEditRecs(prev => prev.map(r => r.$id === rec.$id ? { ...r, notes: t } : r));
+                            }}
+                            multiline
+                            numberOfLines={3}
+                            textAlignVertical="top"
+                          />
+                          <Text style={styles.fieldLabel}>Quantity</Text>
+                          <TextInput
+                            style={styles.fieldInput}
+                            placeholder="e.g. 500ml"
+                            placeholderTextColor="#9ca3af"
+                            value={rec.quantity}
+                            onChangeText={(t) => {
+                              setEditRecs(prev => prev.map(r => r.$id === rec.$id ? { ...r, quantity: t } : r));
+                            }}
+                          />
+                        </View>
+                      ))}
+                      {/* Add product to this section */}
+                      <View style={styles.addRecRow}>
+                        <TouchableOpacity
+                          style={styles.addRecBtn}
+                          onPress={() => setShowItemSearch(showItemSearch === sec.markerId ? false : sec.markerId as any)}
+                        >
+                          <Search color="#16a34a" size={14} />
+                          <Text style={styles.addRecBtnText}>Search Products</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.addRecBtn}
+                          onPress={() => setShowCustomItem(showCustomItem ? false : sec.markerId as any)}
+                        >
+                          <PlusCircle color="#16a34a" size={14} />
+                          <Text style={styles.addRecBtnText}>Custom Item</Text>
+                        </TouchableOpacity>
                       </View>
+                      {/* Inline product search for this section */}
+                      {showItemSearch === (sec.markerId as any) && (
+                        <View style={{ gap: 8 }}>
+                          <View style={styles.searchBox}>
+                            <Search color="#9ca3af" size={14} />
+                            <TextInput
+                              style={styles.searchInput}
+                              placeholder="Search products..."
+                              placeholderTextColor="#9ca3af"
+                              value={itemSearch}
+                              onChangeText={setItemSearch}
+                              autoFocus
+                            />
+                            <TouchableOpacity onPress={() => { setShowItemSearch(false); setItemSearch(""); }}>
+                              <X color="#9ca3af" size={14} />
+                            </TouchableOpacity>
+                          </View>
+                          {itemSearch.length > 0 && filteredItems.map((item) => (
+                            <TouchableOpacity
+                              key={item.$id}
+                              style={styles.itemRow}
+                              onPress={() => {
+                                if (editRecs.find(r => r.itemId === item.$id && !r._deleted)) return;
+                                // Insert after the last product of this section (before next section marker)
+                                const markerIdx = editRecs.findIndex(r => r.$id === sec.markerId);
+                                const nextMarkerIdx = editRecs.findIndex((r, i) => i > markerIdx && r.isSectionMarker);
+                                const insertAt = nextMarkerIdx === -1 ? editRecs.length : nextMarkerIdx;
+                                const newRec: Recommendation = {
+                                  $id: `new_${Date.now()}_${Math.random()}`,
+                                  itemId: item.$id, name: item.name, category: item.category,
+                                  unit: item.unit, dosage: "", quantity: "", notes: "", isCustom: false,
+                                };
+                                setEditRecs(prev => [
+                                  ...prev.slice(0, insertAt),
+                                  newRec,
+                                  ...prev.slice(insertAt),
+                                ]);
+                                setItemSearch(""); setShowItemSearch(false);
+                              }}
+                            >
+                              <Package color="#16a34a" size={14} />
+                              <View style={{ flex: 1 }}>
+                                <Text style={styles.itemName}>{item.name}</Text>
+                                {item.category && <Text style={styles.itemCategory}>{item.category}{item.unit ? ` · ${item.unit}` : ""}</Text>}
+                              </View>
+                              <PlusCircle color="#16a34a" size={16} />
+                            </TouchableOpacity>
+                          ))}
+                          {itemSearch.length > 0 && filteredItems.length === 0 && (
+                            <Text style={styles.emptyText}>No products found</Text>
+                          )}
+                        </View>
+                      )}
+                      {/* Inline custom item for this section */}
+                      {showCustomItem === (sec.markerId as any) && (
+                        <View style={styles.customItemRow}>
+                          <TextInput
+                            style={[styles.editInput, { flex: 1 }]}
+                            placeholder="Enter custom product name"
+                            placeholderTextColor="#9ca3af"
+                            value={customItemName}
+                            onChangeText={setCustomItemName}
+                          />
+                          <TouchableOpacity
+                            style={styles.customAddBtn}
+                            onPress={() => {
+                              if (!customItemName.trim()) return;
+                              const markerIdx = editRecs.findIndex(r => r.$id === sec.markerId);
+                              const nextMarkerIdx = editRecs.findIndex((r, i) => i > markerIdx && r.isSectionMarker);
+                              const insertAt = nextMarkerIdx === -1 ? editRecs.length : nextMarkerIdx;
+                              const newRec: Recommendation = {
+                                $id: `new_${Date.now()}_${Math.random()}`,
+                                customItem: customItemName.trim(), name: customItemName.trim(),
+                                dosage: "", quantity: "", notes: "", isCustom: true,
+                              };
+                              setEditRecs(prev => [
+                                ...prev.slice(0, insertAt),
+                                newRec,
+                                ...prev.slice(insertAt),
+                              ]);
+                              setCustomItemName(""); setShowCustomItem(false);
+                            }}
+                          >
+                            <Text style={styles.customAddBtnText}>Add</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={styles.customCancelBtn}
+                            onPress={() => { setShowCustomItem(false); setCustomItemName(""); }}
+                          >
+                            <X color="#6b7280" size={16} />
+                          </TouchableOpacity>
+                        </View>
+                      )}
                     </View>
-                    <Text style={styles.fieldLabel}>Notes</Text>
-                    <TextInput
-                      style={styles.fieldInput}
-                      placeholder="Application instructions..."
-                      placeholderTextColor="#9ca3af"
-                      value={rec.notes}
-                      onChangeText={(t) => updateEditRec(idx, "notes", t)}
-                    />
-                  </View>
-                ))
-              )}
+                  ))
+                );
+              })()}
+              {/* Add section button */}
+              <TouchableOpacity
+                style={styles.addSectionBtn}
+                onPress={() => {
+                  const newMarker: Recommendation = {
+                    $id: `new_${Date.now()}_${Math.random()}`,
+                    customItem: `§HDR§NEW SECTION§`,
+                    name: "", dosage: "", quantity: "", notes: "", isCustom: true,
+                    isSectionMarker: true, sectionTitle: "NEW SECTION", sectionNote: "",
+                  };
+                  setEditRecs(prev => [...prev, newMarker]);
+                }}
+              >
+                <PlusCircle color="#7c3aed" size={14} />
+                <Text style={styles.addSectionBtnText}>Add Section</Text>
+              </TouchableOpacity>
             </View>
 
             {/* Follow-up (Edit) */}
@@ -1096,10 +1211,12 @@ export default function VisitDetailScreen() {
                 <Text style={styles.emptyText}>No products recommended in this visit</Text>
               ) : (
                 <View style={styles.prescriptionContainer}>
-                  {prescSections.map((sec, secIdx) => {
+                {prescSections.map((sec, secIdx) => {
                     if (sec.products.length === 0) return null;
+                    // Use rendered index for gap (skip empty sections)
+                    const renderedIdx = prescSections.slice(0, secIdx).filter(s => s.products.length > 0).length;
                     return (
-                      <View key={sec.markerId} style={[styles.prescSection, secIdx > 0 && styles.prescSectionGap]}>
+                      <View key={sec.markerId} style={[styles.prescSection, renderedIdx > 0 && styles.prescSectionGap]}>
                         {/* Section title */}
                         {sec.title ? (
                           <Text style={styles.prescSectionTitle}>{sec.title}</Text>
@@ -1301,6 +1418,7 @@ const styles = StyleSheet.create({
   newBadgeText: { fontSize: 9, color: "#15803d", fontWeight: "700" },
   fieldLabel: { fontSize: 10, color: "#6b7280", marginBottom: 4 },
   fieldInput: { backgroundColor: "#f9fafb", borderRadius: 8, padding: 8, fontSize: 12, color: "#1a1a2e", borderWidth: 1, borderColor: "#e5e7eb" },
+  fieldInputLarge: { minHeight: 64, fontSize: 14, paddingVertical: 10 },
   // Follow-up
   followupCard: { borderColor: "#fde68a80" },
   followupBox: { backgroundColor: "#fffbeb", borderRadius: 12, padding: 12, gap: 8 },
@@ -1360,4 +1478,15 @@ const styles = StyleSheet.create({
   prescPlus: { fontSize: 18, fontWeight: "700", color: "#9ca3af", lineHeight: 22 },
   prescNoteRow: { marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: "#f3f4f6" },
   prescNote: { fontSize: 13, color: "#6b7280", fontStyle: "italic" },
+  // ── Section edit styles ───────────────────────────────────────────────────
+  editSection: { gap: 8 },
+  editSectionGap: { marginTop: 16, paddingTop: 16, borderTopWidth: 1, borderTopColor: "#e5e7eb" },
+  editSectionHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
+  editSectionIndexBadge: { width: 24, height: 24, borderRadius: 12, backgroundColor: "#1a1a2e", alignItems: "center", justifyContent: "center" },
+  editSectionIndexText: { fontSize: 11, fontWeight: "800", color: "#fff" },
+  editSectionTitleInput: { flex: 1, backgroundColor: "#f9fafb", borderRadius: 10, paddingHorizontal: 10, paddingVertical: 7, fontSize: 13, fontWeight: "700", color: "#1a1a2e", borderWidth: 1, borderColor: "#e5e7eb", letterSpacing: 1 },
+  editSectionDeleteBtn: { padding: 4 },
+  editSectionNoteInput: { backgroundColor: "#f9fafb", borderRadius: 10, paddingHorizontal: 10, paddingVertical: 7, fontSize: 12, color: "#6b7280", borderWidth: 1, borderColor: "#e5e7eb" },
+  addSectionBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 8, paddingVertical: 10, borderRadius: 10, borderWidth: 1.5, borderStyle: "dashed", borderColor: "#7c3aed40" },
+  addSectionBtnText: { fontSize: 12, color: "#7c3aed", fontWeight: "600" },
 });

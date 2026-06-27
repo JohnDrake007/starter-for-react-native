@@ -448,6 +448,9 @@ export default function NewVisitScreen() {
                         onChangeText={(v) => updateProduct(sec.id, prod.id, "subLabel", v)}
                         placeholder="(optional note, e.g. PSEUDOMONAS)"
                         placeholderTextColor="#c4b5c4"
+                        multiline
+                        numberOfLines={3}
+                        textAlignVertical="top"
                       />
 
                       {/* Inline search overlay */}
@@ -735,7 +738,7 @@ const s = StyleSheet.create({
     textAlign: "center",
   },
   productRemoveBtn: { width: 28, height: 28, borderRadius: 14, backgroundColor: "#fef2f2", justifyContent: "center", alignItems: "center" },
-  subLabelInput: { fontSize: 11, color: "#7c3aed", fontStyle: "italic", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6, borderWidth: 1, borderColor: "#ede9fe", backgroundColor: "#faf5ff" },
+  subLabelInput: { fontSize: 13, color: "#7c3aed", fontStyle: "italic", minHeight: 60, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: "#ede9fe", backgroundColor: "#faf5ff" },
   // Plus separator
   plusRow: { flexDirection: "row", alignItems: "center", marginVertical: 4, gap: 8 },
   plusLine: { flex: 1, height: 1, backgroundColor: "#e5e7eb" },
