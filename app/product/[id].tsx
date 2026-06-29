@@ -2,7 +2,7 @@ import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity, A
 import { useState, useCallback, useRef } from "react";
 import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ArrowLeft, Package, Tag, Beaker, Hash, Calendar, Clock, Pencil, Check, X, Share2 } from "@/components/Icons";
+import { ArrowLeft, Package, Tag, Beaker, Calendar, Clock, Pencil, Check, X, Share2 } from "@/components/Icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { ITEMS_COLLECTION_ID, INVENTORY_ITEMS_COLLECTION_ID, INVENTORY_BATCHES_COLLECTION_ID } from "@/lib/appwrite";
 import { getDocument, updateDocument, getCollection, syncInventoryCollections } from "@/lib/sync-manager";
@@ -227,11 +227,6 @@ export default function ProductDetailScreen() {
     lines.push("📛 *Name:* " + product.name);
     if (product.category) lines.push("🏷️ *Category:* " + product.category);
     if (product.unit) lines.push("🧪 *Unit:* " + product.unit);
-    if (product.tallyCode) lines.push("🔢 *Tally Code:* " + product.tallyCode);
-    if (inventoryItem) {
-      if (inventoryItem.closing_qty) lines.push("📦 *Stock:* " + inventoryItem.closing_qty);
-      if (inventoryItem.closing_value) lines.push("💰 *Value:* ₹" + Number(inventoryItem.closing_value).toLocaleString("en-IN"));
-    }
     if (batches.length > 0) {
       lines.push("\n🗃️ *Batches (" + batches.length + "):*");
       batches.slice(0, 5).forEach((b) => {
@@ -273,11 +268,6 @@ export default function ProductDetailScreen() {
   const daysUntilExpiry = product.expiryDate ? Math.ceil((new Date(product.expiryDate).getTime() - Date.now()) / (1000 * 3600 * 24)) : null;
   const isExpired = daysUntilExpiry !== null && daysUntilExpiry < 0;
   const isUrgent = daysUntilExpiry !== null && daysUntilExpiry >= 0 && daysUntilExpiry <= 30;
-
-  const openingQty = inventoryItem?.opening_qty;
-  const closingQty = inventoryItem?.closing_qty;
-  const openingValue = inventoryItem?.opening_value;
-  const closingValue = inventoryItem?.closing_value;
 
   return (
     <View style={styles.outerContainer}>
@@ -343,14 +333,6 @@ export default function ProductDetailScreen() {
             </View>
 
             <View style={styles.card}>
-              <Text style={styles.label}>Tally Code</Text>
-              <View style={styles.inputRow}>
-                <Hash color="#9ca3af" size={16} />
-                <TextInput style={styles.input} value={editTallyCode} onChangeText={setEditTallyCode} placeholder="e.g. FER001" placeholderTextColor="#9ca3af" autoCapitalize="characters" />
-              </View>
-            </View>
-
-            <View style={styles.card}>
               <Text style={styles.label}>Expiry Date</Text>
               <TouchableOpacity style={styles.inputRow} onPress={openExpiryDatePicker}>
                 <Calendar color={editExpiryDate ? "#16a34a" : "#9ca3af"} size={16} />
@@ -404,13 +386,6 @@ export default function ProductDetailScreen() {
                 <Text style={styles.detailLabel}>Unit</Text>
                 <Text style={styles.detailValue}>{product.unit || "—"}</Text>
               </View>
-              {product.tallyCode && (
-                <View style={styles.detailRow}>
-                  <Hash color="#6b7280" size={16} />
-                  <Text style={styles.detailLabel}>Tally Code</Text>
-                  <Text style={[styles.detailValue, styles.mono]}>{product.tallyCode}</Text>
-                </View>
-              )}
               {product.expiryDate && (
                 <View style={styles.detailRow}>
                   <Calendar color="#6b7280" size={16} />
@@ -427,34 +402,6 @@ export default function ProductDetailScreen() {
                 </View>
               )}
             </View>
-
-            {inventoryItem && (
-              <View style={styles.card}>
-                <Text style={styles.sectionTitle}>📊 Stock Levels</Text>
-                <View style={styles.stockGrid}>
-                  <View style={styles.stockCard}>
-                    <Text style={styles.stockCardLabel}>Opening Qty</Text>
-                    <Text style={styles.stockCardValue}>{openingQty || "—"}</Text>
-                    {openingValue ? (
-                      <Text style={styles.stockCardSub}>₹{Number(openingValue).toLocaleString("en-IN", { maximumFractionDigits: 0 })}</Text>
-                    ) : null}
-                  </View>
-                  <View style={[styles.stockCard, styles.stockCardHighlight]}>
-                    <Text style={styles.stockCardLabel}>Closing Qty</Text>
-                    <Text style={[styles.stockCardValue, styles.stockCardValueGreen]}>{closingQty || "—"}</Text>
-                    {closingValue ? (
-                      <Text style={styles.stockCardSub}>₹{Number(closingValue).toLocaleString("en-IN", { maximumFractionDigits: 0 })}</Text>
-                    ) : null}
-                  </View>
-                </View>
-                {inventoryItem.stock_group ? (
-                  <View style={styles.stockGroupRow}>
-                    <Text style={styles.stockGroupLabel}>Group:</Text>
-                    <Text style={styles.stockGroupValue}>{inventoryItem.stock_group}</Text>
-                  </View>
-                ) : null}
-              </View>
-            )}
 
             {batches.length > 0 && (
               <View style={styles.card}>

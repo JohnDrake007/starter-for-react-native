@@ -36,6 +36,8 @@ export default function CustomerDetailScreen() {
   const [editPhone, setEditPhone] = useState("");
   const [editAddress, setEditAddress] = useState("");
   const [editCropType, setEditCropType] = useState("");
+  const [editContactName, setEditContactName] = useState("");
+  const [editContactPhone, setEditContactPhone] = useState("");
 
   const cropColors: Record<string, { bg: string; text: string }> = {
     Cardamom: { bg: "#dcfce7", text: "#15803d" },
@@ -133,6 +135,8 @@ export default function CustomerDetailScreen() {
     setEditPhone(customer.phone || "");
     setEditAddress(customer.address || "");
     setEditCropType(customer.cropType || "");
+    setEditContactName(customer.contact_person || customer.contactName || "");
+    setEditContactPhone(customer.mobile || customer.contactPhone || "");
     setEditing(true);
   };
 
@@ -145,6 +149,8 @@ export default function CustomerDetailScreen() {
       const updateData: any = { name: editName.trim(), phone: editPhone.trim() };
       updateData.address = editAddress.trim() || undefined;
       updateData.cropType = editCropType || undefined;
+      updateData.contact_person = editContactName.trim() || undefined;
+      updateData.mobile = editContactPhone.trim() || undefined;
       await updateDocument(CUSTOMERS_COLLECTION_ID, id, updateData);
       setEditing(false);
       await loadData();
@@ -166,7 +172,11 @@ export default function CustomerDetailScreen() {
     lines.push(`*Name:* ${customer.name}`);
     lines.push(`*Phone:* ${customer.phone}`);
     if (customer.address) lines.push(`*Address:* ${customer.address}`);
-    if (customer.contactName) lines.push(`*Contact Person:* ${customer.contactName}${customer.contactPhone ? ` (${customer.contactPhone})` : ""}`);
+    {
+      const cName = customer.contact_person || customer.contactName || "";
+      const cPhone = customer.mobile || customer.contactPhone || "";
+      if (cName || cPhone) lines.push(`*Contact Person:* ${cName}${cPhone ? ` (${cPhone})` : ""}`);
+    }
     if (customer.cropType) lines.push(`*Crop:* ${customer.cropType}`);
     if (customer.latitude && customer.longitude) {
       lines.push(`*GPS:* ${Number(customer.latitude).toFixed(4)}, ${Number(customer.longitude).toFixed(4)}`);
@@ -286,6 +296,14 @@ export default function CustomerDetailScreen() {
                 <TextInput style={styles.editInput} value={editAddress} onChangeText={setEditAddress} placeholder="Village/Town, District" placeholderTextColor="#9ca3af" />
               </View>
               <View style={styles.editField}>
+                <Text style={styles.editLabel}>Contact Person Name</Text>
+                <TextInput style={styles.editInput} value={editContactName} onChangeText={setEditContactName} placeholder="Contact person's name" placeholderTextColor="#9ca3af" />
+              </View>
+              <View style={styles.editField}>
+                <Text style={styles.editLabel}>Contact Person Phone</Text>
+                <TextInput style={styles.editInput} value={editContactPhone} onChangeText={setEditContactPhone} placeholder="+91 98765 43210" placeholderTextColor="#9ca3af" keyboardType="phone-pad" />
+              </View>
+              <View style={styles.editField}>
                 <Text style={styles.editLabel}>Crop Type</Text>
                 <View style={styles.cropGrid}>
                   {cropOptions.map((crop) => (
@@ -325,14 +343,20 @@ export default function CustomerDetailScreen() {
                 </View>
               ) : null}
 
-              {customer.contactName ? (
+              {(customer.contact_person || customer.contactName || customer.mobile || customer.contactPhone) ? (
                 <View style={styles.infoRow}>
                   <View style={styles.infoIcon}>
                     <Users color="#16a34a" size={16} />
                   </View>
                   <View style={styles.infoTextCol}>
                     <Text style={styles.infoLabel}>Contact Person</Text>
-                    <Text style={styles.infoValue}>{customer.contactName}{customer.contactPhone ? ` — ${customer.contactPhone}` : ""}</Text>
+                    <Text style={styles.infoValue}>
+                      {(() => {
+                        const cName = customer.contact_person || customer.contactName || "";
+                        const cPhone = customer.mobile || customer.contactPhone || "";
+                        return cName && cPhone ? `${cName} — ${cPhone}` : cName || cPhone;
+                      })()}
+                    </Text>
                   </View>
                 </View>
               ) : null}

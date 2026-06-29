@@ -139,7 +139,7 @@ export default function ProductCatalogScreen() {
       if (selectedCategory !== "All" && item.category !== selectedCategory) return false;
       if (search) {
         const q = search.toLowerCase();
-        if (!item.name.toLowerCase().includes(q) && !(item.tallyCode || "").toLowerCase().includes(q)) return false;
+        if (!item.name.toLowerCase().includes(q)) return false;
       }
       if (expiryDays !== null) {
         // Prefer batch-level expiry; fall back to item-level
@@ -168,7 +168,6 @@ export default function ProductCatalogScreen() {
     lines.push(`📛 *Name:* ${item.name}`);
     if (item.category) lines.push(`🏷️ *Category:* ${item.category}`);
     if (item.unit) lines.push(`🧪 *Unit:* ${item.unit}`);
-    if (item.tallyCode) lines.push(`🔢 *Tally Code:* ${item.tallyCode}`);
     Linking.openURL(`https://wa.me/?text=${encodeURIComponent(lines.join("\n"))}`);
   };
 
@@ -217,9 +216,6 @@ export default function ProductCatalogScreen() {
                 <Text style={styles.unitText}>{item.unit}</Text>
               </View>
             )}
-            {item.tallyCode && (
-              <Text style={styles.tallyCode}>{item.tallyCode}</Text>
-            )}
             {item.expiryDate && (() => {
               const daysUntil = Math.ceil((new Date(item.expiryDate).getTime() - Date.now()) / (1000 * 3600 * 24));
               if (isNaN(daysUntil)) return null;
@@ -263,7 +259,7 @@ export default function ProductCatalogScreen() {
           <Search color="#9ca3af" size={16} />
           <TextInput
             style={styles.searchInput}
-            placeholder="Search products by name, Tally code..."
+            placeholder="Search products by name..."
             placeholderTextColor="#9ca3af"
             value={search}
             onChangeText={setSearch}

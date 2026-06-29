@@ -2,7 +2,7 @@ import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Alert,
 import { useState, useRef } from "react";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ArrowLeft, Plus, Hash, Calendar, X } from "@/components/Icons";
+import { ArrowLeft, Plus, Calendar, X } from "@/components/Icons";
 import { ITEMS_COLLECTION_ID } from "@/lib/appwrite";
 import { createDocument } from "@/lib/sync-manager";
 import DateTimePicker from "@react-native-community/datetimepicker";
@@ -16,7 +16,6 @@ export default function AddProductScreen() {
   const [name, setName] = useState("");
   const [category, setCategory] = useState("");
   const [unit, setUnit] = useState("");
-  const [tallyCode, setTallyCode] = useState("");
   const [expiryDate, setExpiryDate] = useState("");
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -34,7 +33,6 @@ export default function AddProductScreen() {
         name: name.trim(),
         category: category || null,
         unit: unit || null,
-        tallyCode: tallyCode.trim() || null,
         expiryDate: expiryDate || null,
       });
       router.back();
@@ -118,21 +116,6 @@ export default function AddProductScreen() {
                 <Text style={[styles.chipText, unit === u && styles.chipTextActive]}>{u}</Text>
               </TouchableOpacity>
             ))}
-          </View>
-        </View>
-
-        <View style={styles.fieldGroup}>
-          <Text style={styles.label}>Tally Code</Text>
-          <View style={styles.inputRow}>
-            <Hash color="#9ca3af" size={16} />
-            <TextInput
-              style={styles.input}
-              placeholder="e.g. FER001"
-              placeholderTextColor="#9ca3af"
-              value={tallyCode}
-              onChangeText={setTallyCode}
-              autoCapitalize="characters"
-            />
           </View>
         </View>
 

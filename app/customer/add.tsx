@@ -64,8 +64,8 @@ export default function AddCustomerScreen() {
         phone: phone.trim(),
         address: address.trim() || undefined,
         cropType: cropType || undefined,
-        contactName: contactName.trim() || undefined,
-        contactPhone: contactPhone.trim() || undefined,
+        contact_person: contactName.trim() || undefined,
+        mobile: contactPhone.trim() || undefined,
         latitude: latitude || undefined,
         longitude: longitude || undefined,
       });
