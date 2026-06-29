@@ -67,7 +67,8 @@ export default function CustomerDetailScreen() {
     if (!id) return;
     try {
       const cDoc = getDocument(CUSTOMERS_COLLECTION_ID, id);
-      setCustomer(cDoc);
+      // Fall back to the contact person's mobile when a customer has no phone
+      setCustomer(cDoc ? { ...cDoc, phone: cDoc.phone || cDoc.mobile || "" } : cDoc);
 
       let visitsRes = getCollection(VISITS_COLLECTION_ID).sort((a, b) => 
         new Date(b.$createdAt).getTime() - new Date(a.$createdAt).getTime()

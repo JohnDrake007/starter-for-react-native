@@ -135,7 +135,7 @@ export default function VisitDetailScreen() {
         try {
           const cDoc = getDocument(CUSTOMERS_COLLECTION_ID, visitDoc.customerId);
           if (cDoc) {
-            customerData = { name: cDoc.name, phone: cDoc.phone, address: cDoc.address, cropType: cDoc.cropType };
+            customerData = { name: cDoc.name, phone: cDoc.phone || cDoc.mobile || "", address: cDoc.address, cropType: cDoc.cropType };
           }
         } catch {}
       }

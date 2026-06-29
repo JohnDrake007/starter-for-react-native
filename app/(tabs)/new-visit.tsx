@@ -139,7 +139,11 @@ export default function NewVisitScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      try { setCustomers(getCollection(CUSTOMERS_COLLECTION_ID) as Customer[]); } catch {}
+      try {
+        // Fall back to the contact person's mobile when a customer has no phone
+        const cs = getCollection(CUSTOMERS_COLLECTION_ID).map((c: any) => ({ ...c, phone: c.phone || c.mobile || "" }));
+        setCustomers(cs as Customer[]);
+      } catch {}
       try { setItems(getCollection(ITEMS_COLLECTION_ID) as Item[]); } catch {}
     }, [])
   );

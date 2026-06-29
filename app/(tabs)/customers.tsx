@@ -40,7 +40,9 @@ export default function CustomersScreen() {
   const fetchCustomers = useCallback(async () => {
     try {
       const allCustomers = getCollection(CUSTOMERS_COLLECTION_ID);
-      setCustomers(allCustomers as unknown as Customer[]);
+      // Fall back to the contact person's mobile when a customer has no phone
+      const normalized = allCustomers.map((c: any) => ({ ...c, phone: c.phone || c.mobile || "" }));
+      setCustomers(normalized as unknown as Customer[]);
     } catch {
       setCustomers([]);
     } finally {
