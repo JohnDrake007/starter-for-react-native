@@ -3,7 +3,7 @@ import { useState, useCallback } from "react";
 import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Search, Calendar, Package, Sprout, MapPin, ArrowLeft, Filter, X, ChevronLeft, ChevronRight } from "@/components/Icons";
-import { CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID } from "@/lib/appwrite";
+import { CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, ITEMS_COLLECTION_ID } from "@/lib/appwrite";
 import { getCollection } from "@/lib/sync-manager";
 import { useNetwork } from "@/lib/network-provider";
 
@@ -59,10 +59,16 @@ export default function AllVisitsScreen() {
 
       let allRecNames: Record<string, string[]> = {};
       try {
+        const itemNameMap: Record<string, string> = {};
+        getCollection(ITEMS_COLLECTION_ID).forEach((item: any) => { itemNameMap[item.$id] = item.name; });
         const recsRes = getCollection(RECOMMENDATIONS_COLLECTION_ID);
         recsRes.forEach((r) => {
+          // Skip §HDR§ section markers — only show actual product names
+          if (r.customItem && r.customItem.startsWith("§HDR§")) return;
+          const name = r.customItem || (r.itemId ? itemNameMap[r.itemId] : "");
+          if (!name) return; // skip unresolved item ids / empties
           if (!allRecNames[r.visitId]) allRecNames[r.visitId] = [];
-          allRecNames[r.visitId].push(r.customItem || r.itemId || "Item");
+          allRecNames[r.visitId].push(name);
         });
       } catch {}
 

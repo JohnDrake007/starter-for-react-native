@@ -361,7 +361,7 @@ export default function NewVisitScreen() {
   // ── Step 3 — Prescription Builder ───────────────────────────────────────────
   const renderStep3 = () => (
     <View style={s.stepContent}>
-      <Text style={s.stepTitle}>Prescription</Text>
+      <Text style={s.stepTitle}>Recommendations</Text>
       <Text style={s.stepSubtitle}>Build spray / foliar schedules section by section</Text>
 
       {sections.map((sec, secIdx) => {

@@ -540,7 +540,7 @@ export default function VisitDetailScreen() {
       lines.push("");
     }
     if (prescSections.some((s) => s.products.length > 0)) {
-      lines.push("*Prescription:*");
+      lines.push("*Recommendations:*");
       lines.push(buildPrescriptionText(prescSections));
       lines.push("");
     }
@@ -668,7 +668,12 @@ export default function VisitDetailScreen() {
         keyboardShouldPersistTaps="handled"
       >
         {/* Customer Card */}
-        <View style={styles.customerCard}>
+        <TouchableOpacity
+          style={styles.customerCard}
+          onPress={() => { if (visitData?.customerId) router.push(`/customer/${visitData.customerId}`); }}
+          disabled={!visitData?.customerId}
+          activeOpacity={0.7}
+        >
           <View style={styles.customerAvatar}>
             <Sprout color="#16a34a" size={20} />
           </View>
@@ -688,7 +693,7 @@ export default function VisitDetailScreen() {
             ) : null}
           </View>
           <ChevronRight color="#9ca3af" size={18} />
-        </View>
+        </TouchableOpacity>
 
         {/* ── EDIT MODE ─────────────────────────────────────────────────── */}
         {editing ? (
@@ -1204,7 +1209,7 @@ export default function VisitDetailScreen() {
                   <Package color="#16a34a" size={14} />
                 </View>
                 <Text style={styles.cardTitle}>
-                  Prescription ({prescSections.filter((s) => s.products.length > 0).length} section{prescSections.filter((s) => s.products.length > 0).length !== 1 ? "s" : ""})
+                  Recommendations ({prescSections.filter((s) => s.products.length > 0).length} section{prescSections.filter((s) => s.products.length > 0).length !== 1 ? "s" : ""})
                 </Text>
               </View>
               {!hasProducts ? (

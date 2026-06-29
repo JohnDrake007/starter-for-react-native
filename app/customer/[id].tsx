@@ -86,10 +86,14 @@ export default function CustomerDetailScreen() {
         let photoCount = 0;
         try {
           const recsRes = getCollection(RECOMMENDATIONS_COLLECTION_ID).filter(r => r.visitId === v.$id);
-          recommendations = recsRes.map((r: any) => ({
-            name: r.customItem || (r.itemId && allItemNames[r.itemId]?.name) || "Unknown",
-            dosage: r.dosage || undefined,
-          }));
+          recommendations = recsRes
+            // Skip §HDR§ section markers — only show actual product names
+            .filter((r: any) => !(r.customItem && r.customItem.startsWith("§HDR§")))
+            .map((r: any) => ({
+              name: r.customItem || (r.itemId && allItemNames[r.itemId]?.name) || "",
+              dosage: r.dosage || undefined,
+            }))
+            .filter((rec) => !!rec.name); // drop unresolved item ids / empties
         } catch {}
         try {
           const photosRes = getCollection("visit_photos").filter(p => p.visitId === v.$id);
@@ -343,23 +347,27 @@ export default function CustomerDetailScreen() {
                 </View>
               ) : null}
 
-              {(customer.contact_person || customer.contactName || customer.mobile || customer.contactPhone) ? (
-                <View style={styles.infoRow}>
-                  <View style={styles.infoIcon}>
-                    <Users color="#16a34a" size={16} />
-                  </View>
-                  <View style={styles.infoTextCol}>
-                    <Text style={styles.infoLabel}>Contact Person</Text>
-                    <Text style={styles.infoValue}>
-                      {(() => {
-                        const cName = customer.contact_person || customer.contactName || "";
-                        const cPhone = customer.mobile || customer.contactPhone || "";
-                        return cName && cPhone ? `${cName} — ${cPhone}` : cName || cPhone;
-                      })()}
-                    </Text>
-                  </View>
-                </View>
-              ) : null}
+              {(customer.contact_person || customer.contactName || customer.mobile || customer.contactPhone) ? (() => {
+                const cName = customer.contact_person || customer.contactName || "";
+                const cPhone = customer.mobile || customer.contactPhone || "";
+                return (
+                  <TouchableOpacity
+                    style={styles.infoRow}
+                    onPress={() => { if (cPhone) Linking.openURL(`tel:${cPhone}`).catch(() => {}); }}
+                    disabled={!cPhone}
+                    activeOpacity={0.7}
+                  >
+                    <View style={styles.infoIcon}>
+                      <Users color="#16a34a" size={16} />
+                    </View>
+                    <View style={styles.infoTextCol}>
+                      <Text style={styles.infoLabel}>Contact Person</Text>
+                      {cName ? <Text style={styles.infoValue}>{cName}</Text> : null}
+                      {cPhone ? <Text style={styles.phoneLink}>{cPhone}</Text> : null}
+                    </View>
+                  </TouchableOpacity>
+                );
+              })() : null}
 
               {customer.latitude && customer.longitude ? (
                 <TouchableOpacity style={styles.mapsLink} onPress={openMaps}>

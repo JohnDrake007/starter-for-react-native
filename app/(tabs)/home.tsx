@@ -86,8 +86,11 @@ export default function HomeScreen() {
 
           allRecs.forEach((r) => {
             if (allVisitIds.includes(r.visitId)) {
+              // Skip §HDR§ section markers — only show actual product names
+              if (r.customItem && r.customItem.startsWith("§HDR§")) return;
+              const name = r.customItem || (r.itemId ? itemNameMap[r.itemId] : "");
+              if (!name) return; // skip unresolved item ids / empties
               if (!recsByVisit[r.visitId]) recsByVisit[r.visitId] = [];
-              const name = r.customItem || (r.itemId ? (itemNameMap[r.itemId] || r.itemId) : "Item");
               recsByVisit[r.visitId].push(name);
             }
           });
