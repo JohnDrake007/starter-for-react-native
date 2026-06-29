@@ -6,11 +6,25 @@
     "preview": {
       "android": {
         "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_APPWRITE_ENDPOINT": "https://sgp.cloud.appwrite.io/v1",
+        "EXPO_PUBLIC_APPWRITE_PROJECT_ID": "6a1bf181002ff774402d",
+        "EXPO_PUBLIC_APPWRITE_PROJECT_NAME": "Field Agent",
+        "EXPO_PUBLIC_APPWRITE_DATABASE_ID": "6a1c0a8a0029a3ca0c82",
+        "EXPO_PUBLIC_APPWRITE_STORAGE_BUCKET_ID": "visit-photos"
       }
     },
     "production": {
       "android": {
         "buildType": "app-bundle"
+      },
+      "env": {
+        "EXPO_PUBLIC_APPWRITE_ENDPOINT": "https://sgp.cloud.appwrite.io/v1",
+        "EXPO_PUBLIC_APPWRITE_PROJECT_ID": "6a1bf181002ff774402d",
+        "EXPO_PUBLIC_APPWRITE_PROJECT_NAME": "Field Agent",
+        "EXPO_PUBLIC_APPWRITE_DATABASE_ID": "6a1c0a8a0029a3ca0c82",
+        "EXPO_PUBLIC_APPWRITE_STORAGE_BUCKET_ID": "visit-photos"
       }
     }
   },
