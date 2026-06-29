@@ -354,9 +354,6 @@ export default function AllVisitsScreen() {
             const visitDateLabel = v.visitDate
               ? new Date(v.visitDate).toLocaleDateString("en-IN", { day: "numeric", month: "short" })
               : "";
-            const daysUntil = v.nextVisitDate
-              ? Math.ceil((new Date(v.nextVisitDate).getTime() - Date.now()) / (1000 * 3600 * 24))
-              : null;
             return (
               <TouchableOpacity style={styles.visitCard} onPress={() => router.push(`/visit/${v.$id}`)}>
                 <View style={[styles.visitAvatar, { backgroundColor: getAvatarColor(v.customerName) }]}>
@@ -392,11 +389,11 @@ export default function AllVisitsScreen() {
                       )}
                     </View>
                   )}
-                  {daysUntil !== null ? (
-                    <View style={[styles.followBadge, daysUntil <= 0 ? styles.followBadgeRed : daysUntil <= 3 ? styles.followBadgeAmber : styles.followBadgeGreen]}>
-                      <Calendar color={daysUntil <= 0 ? "#e11d48" : daysUntil <= 3 ? "#b45309" : "#16a34a"} size={10} />
-                      <Text style={[styles.followBadgeText, daysUntil <= 0 ? { color: "#e11d48" } : daysUntil <= 3 ? { color: "#b45309" } : { color: "#16a34a" }]}>
-                        {daysUntil <= 0 ? "Overdue" : daysUntil === 1 ? "Tomorrow" : `In ${daysUntil}d`}
+                  {v.nextVisitDate ? (
+                    <View style={[styles.followBadge, styles.followBadgeGreen]}>
+                      <Calendar color="#16a34a" size={10} />
+                      <Text style={[styles.followBadgeText, { color: "#16a34a" }]}>
+                        Follow-up: {new Date(v.nextVisitDate).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
                       </Text>
                     </View>
                   ) : null}

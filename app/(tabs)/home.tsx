@@ -64,9 +64,12 @@ export default function HomeScreen() {
           cropType: customer.cropType,
           nextVisitDate: d.nextVisitDate,
           nextVisitTask: d.nextVisitTask || "Follow up",
-          daysUntil: daysUntil >= 0 ? daysUntil : 0,
+          daysUntil,
         };
-      }).sort((a, b) => a.daysUntil - b.daysUntil);
+      })
+      // Only show upcoming (today onward) — past/overdue scheduled visits are hidden
+      .filter((r) => r.daysUntil >= 0)
+      .sort((a, b) => a.daysUntil - b.daysUntil);
 
       setStats({
         totalCustomers: allCustomers.length,
@@ -131,12 +134,7 @@ export default function HomeScreen() {
   }, [loadData, syncNow]);
 
   const formatReminderDate = (dateStr: string) => {
-    const date = new Date(dateStr);
-    const diffDays = Math.ceil((date.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
-    if (diffDays === 0) return "Today";
-    if (diffDays === 1) return "Tomorrow";
-    if (diffDays > 0 && diffDays <= 7) return `In ${diffDays} days`;
-    return date.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+    return new Date(dateStr).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
   };
 
   const today = new Date();
@@ -213,8 +211,8 @@ export default function HomeScreen() {
             </View>
           ) : (
             reminders.slice(0, 4).map((r) => {
-              const urgency = r.daysUntil <= 2 ? "#e11d48" : r.daysUntil <= 7 ? "#f59e0b" : "#16a34a";
-              const urgencyBg = r.daysUntil <= 2 ? "#fecdd3" : r.daysUntil <= 7 ? "#fef3c7" : "#dcfce7";
+              const urgency = "#16a34a";
+              const urgencyBg = "#dcfce7";
               return (
                 <TouchableOpacity key={r.$id} style={styles.reminderCard} onPress={() => router.push(`/visit/${r.visitId}`)}>
                   <View style={[styles.reminderIcon, { backgroundColor: urgencyBg }]}>

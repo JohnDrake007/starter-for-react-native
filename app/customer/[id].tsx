@@ -454,9 +454,6 @@ export default function CustomerDetailScreen() {
             <View style={styles.timelineLine} />
             {visits.slice(0, 5).map((visit, idx) => {
               const hasFollowUp = !!visit.nextVisitDate;
-              const daysUntil = visit.nextVisitDate
-                ? Math.ceil((new Date(visit.nextVisitDate).getTime() - Date.now()) / (1000 * 3600 * 24))
-                : null;
               return (
                 <View key={visit.$id} style={styles.timelineItem}>
                   <View style={[styles.timelineDot, idx === 0 && styles.timelineDotActive]} />
@@ -467,11 +464,8 @@ export default function CustomerDetailScreen() {
                         <Text style={styles.visitDateText}>{formatDate(visit.visitDate)}</Text>
                       </View>
                       {hasFollowUp && (
-                        <View style={[
-                          styles.followBadge,
-                          daysUntil !== null && daysUntil <= 0 ? styles.followBadgeRed : daysUntil !== null && daysUntil <= 3 ? styles.followBadgeAmber : styles.followBadgeGreen,
-                        ]}>
-                          <Text style={[styles.followBadgeText, daysUntil !== null && daysUntil <= 0 ? { color: "#e11d48" } : daysUntil !== null && daysUntil <= 3 ? { color: "#b45309" } : { color: "#16a34a" }]}>
+                        <View style={[styles.followBadge, styles.followBadgeGreen]}>
+                          <Text style={[styles.followBadgeText, { color: "#16a34a" }]}>
                             Follow-up: {formatShortDate(visit.nextVisitDate!)}
                           </Text>
                         </View>

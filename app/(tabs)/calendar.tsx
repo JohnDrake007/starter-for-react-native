@@ -134,11 +134,11 @@ export default function CalendarScreen() {
 
   const filteredReminders = selectedDate
     ? reminders.filter((r) => toLocalDateStr(r.nextVisitDate) === selectedDate)
-    : reminders;
+    // No date selected → show only upcoming (today onward); past/overdue ones appear
+    // only when their day is explicitly selected on the calendar.
+    : reminders.filter((r) => toLocalDateStr(r.nextVisitDate) >= todayStr);
 
   const formatDate = (dateStr: string) => new Date(dateStr).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
-  const getDaysUntil = (dateStr: string) => Math.ceil((new Date(dateStr).getTime() - Date.now()) / (1000 * 3600 * 24));
-  const getDaysLabel = (days: number) => days <= 0 ? "Overdue" : days === 1 ? "Tomorrow" : `${days} days away`;
 
   const handleDayPress = (fd: string) => {
     setSelectedDate((prev) => prev === fd ? null : fd);
@@ -244,17 +244,16 @@ export default function CalendarScreen() {
         </View>
       ) : (
         filteredReminders.slice(0, 10).map((r) => {
-          const daysUntil = getDaysUntil(r.nextVisitDate);
-          const urgency = daysUntil <= 2 ? "#e11d48" : daysUntil <= 7 ? "#f59e0b" : "#16a34a";
+          const urgency = "#16a34a";
           return (
             <TouchableOpacity key={r.$id} style={styles.reminderCard} onPress={() => router.push(`/visit/${r.visitId}`)}>
-              <View style={[styles.reminderIcon, { backgroundColor: daysUntil <= 2 ? "#fecdd3" : daysUntil <= 7 ? "#fef3c7" : "#dcfce7" }]}>
+              <View style={[styles.reminderIcon, { backgroundColor: "#dcfce7" }]}>
                 <Bell color={urgency} size={16} />
               </View>
               <View style={styles.reminderInfo}>
 <View style={styles.reminderSection}>
                   <Text style={styles.reminderName} numberOfLines={1}>{r.customerName || "Unknown"}</Text>
-                  <View style={[styles.reminderBadge, { backgroundColor: daysUntil <= 2 ? "#fecdd3" : daysUntil <= 7 ? "#fef3c7" : "#dcfce7" }]}>
+                  <View style={[styles.reminderBadge, { backgroundColor: "#dcfce7" }]}>
                     <Text style={[styles.reminderBadgeText, { color: urgency }]}>{formatDate(r.nextVisitDate)}</Text>
                   </View>
                 </View>
@@ -265,9 +264,6 @@ export default function CalendarScreen() {
                     <Text style={styles.cropText}>{r.cropType}</Text>
                   </View>
                 ) : null}
-                <Text style={[styles.daysAwayText, { color: urgency }]}>
-                  {getDaysLabel(daysUntil)}
-                </Text>
               </View>
             </TouchableOpacity>
           );

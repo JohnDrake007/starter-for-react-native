@@ -608,9 +608,6 @@ export default function VisitDetailScreen() {
 
   const displayLat = editing ? editLatitude : visitData.latitude;
   const displayLng = editing ? editLongitude : visitData.longitude;
-  const daysUntilNext = (editing ? (editNextVisitDate ? new Date(editNextVisitDate) : null) : visitData.nextVisitDate ? new Date(visitData.nextVisitDate) : null)
-    ? Math.ceil(((editing ? new Date(editNextVisitDate!) : new Date(visitData.nextVisitDate!)).getTime() - Date.now()) / (1000 * 3600 * 24))
-    : null;
 
   // Visible photos in edit mode (exclude deleted ones)
   const visiblePhotos = editing
@@ -1274,24 +1271,6 @@ export default function VisitDetailScreen() {
                 <Calendar color="#b45309" size={14} />
                 <Text style={styles.followupDate}>{formatDate(visitData.nextVisitDate)}</Text>
               </View>
-              {daysUntilNext !== null && (
-                <View style={[
-                  styles.urgencyBadge,
-                  daysUntilNext <= 0 ? styles.urgencyBadgeRed :
-                  daysUntilNext <= 3 ? styles.urgencyBadgeAmber :
-                  styles.urgencyBadgeGreen,
-                ]}>
-                  <Clock color={daysUntilNext <= 0 ? "#e11d48" : daysUntilNext <= 3 ? "#b45309" : "#16a34a"} size={10} />
-                  <Text style={[
-                    styles.urgencyBadgeText,
-                    daysUntilNext <= 0 ? { color: "#e11d48" } :
-                    daysUntilNext <= 3 ? { color: "#b45309" } :
-                    { color: "#16a34a" },
-                  ]}>
-                    {daysUntilNext <= 0 ? "Overdue" : daysUntilNext === 1 ? "Tomorrow" : `In ${daysUntilNext} days`}
-                  </Text>
-                </View>
-              )}
               {visitData.nextVisitTask ? (
                 <View style={styles.followupTaskSection}>
                   <Text style={styles.followupTaskLabel}>TASK</Text>
