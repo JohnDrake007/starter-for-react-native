@@ -593,39 +593,49 @@ async function pushPhotoUpload(
 /**
  * Pull data from Appwrite and merge it into the local cache.
  *
- * Delta sync: when a last-sync timestamp exists, only documents modified
- * (`$updatedAt`) since that point are fetched, keeping the sync idempotent —
- * unchanged records are not re-fetched and the upsert-by-`$id` merge guarantees
- * no duplicate entries on repeated sync attempts. On the very first sync (no
- * last-sync time) a full pull is performed and stale server documents that no
- * longer exist remotely are reconciled away (delete detection). Local-only
- * pending documents are always preserved.
+ * A full pull with delete reconciliation is performed every sync (not a delta
+ * pull). This is essential because Appwrite's listDocuments endpoint only
+ * returns documents that still exist — a delta pull based on `$updatedAt`
+ * catches adds and modifies but can never detect deletes (a deleted document
+ * has no `$updatedAt` to filter on). Without full reconciliation, deletes
+ * made on the server or by another device would remain as stale ghosts in the
+ * local cache forever, causing the exact cross-device inconsistencies reported
+ * (duplicate recommendations after edit, deleted photos reappearing, etc.).
+ *
+ * The pull is paginated to handle collections larger than the page size, and
+ * the upsert-by-`$id` merge keeps it idempotent — no duplicate entries on
+ * repeated sync attempts. Local-only pending documents are always preserved.
  */
 async function pullAllCollections(): Promise<void> {
   for (const collectionId of SYNCABLE_COLLECTIONS) {
     try {
-      const isDelta = !!lastSyncTime;
-      const queries: any[] = [Query.limit(1000), Query.orderDesc("$createdAt")];
-      if (isDelta) {
-        queries.push(Query.greaterThan("$updatedAt", lastSyncTime!));
-      }
-      const res = await databases.listDocuments(DATABASE_ID, collectionId, queries);
-      const serverDocs = res.documents as any[];
+      // Paginated full pull — fetch every document currently on the server.
+      const allServerDocs: any[] = [];
+      let offset = 0;
+      const limit = 1000;
 
-      if (isDelta && serverDocs.length === 0) continue;
-
-      // Full pull: reconcile deletes — drop any server-id docs absent from the
-      // server response while keeping local-only pending docs.
-      if (!isDelta) {
-        const serverIds = new Set(serverDocs.map((d: any) => d.$id));
-        const existing = cache[collectionId] || [];
-        cache[collectionId] = existing.filter(
-          (d: any) => d.$id.startsWith("local_") || serverIds.has(d.$id)
-        );
+      while (true) {
+        const res = await databases.listDocuments(DATABASE_ID, collectionId, [
+          Query.limit(limit),
+          Query.offset(offset),
+          Query.orderDesc("$createdAt"),
+        ]);
+        allServerDocs.push(...(res.documents as any[]));
+        if (res.documents.length < limit) break;
+        offset += limit;
       }
+
+      // Reconcile deletes — remove any server-id docs from the local cache
+      // that no longer exist on the server. Local-only pending docs (local_
+      // ids that haven't been pushed yet) are always kept.
+      const serverIds = new Set(allServerDocs.map((d: any) => d.$id));
+      const existing = cache[collectionId] || [];
+      cache[collectionId] = existing.filter(
+        (d: any) => d.$id.startsWith("local_") || serverIds.has(d.$id)
+      );
 
       // Idempotent upsert: update existing entries or add new ones by $id.
-      for (const doc of serverDocs) {
+      for (const doc of allServerDocs) {
         upsertIntoCache(collectionId, doc);
       }
       await persistCollection(collectionId);
@@ -643,11 +653,22 @@ async function pullAllCollections(): Promise<void> {
 export async function syncInventoryCollections(): Promise<void> {
   for (const collectionId of INVENTORY_COLLECTIONS) {
     try {
-      const res = await databases.listDocuments(DATABASE_ID, collectionId, [
-        Query.limit(5000),
-        Query.orderDesc("$createdAt"),
-      ]);
-      cache[collectionId] = res.documents as any[];
+      const allDocs: any[] = [];
+      let offset = 0;
+      const limit = 1000;
+
+      while (true) {
+        const res = await databases.listDocuments(DATABASE_ID, collectionId, [
+          Query.limit(limit),
+          Query.offset(offset),
+          Query.orderDesc("$createdAt"),
+        ]);
+        allDocs.push(...(res.documents as any[]));
+        if (res.documents.length < limit) break;
+        offset += limit;
+      }
+
+      cache[collectionId] = allDocs;
       await persistCollection(collectionId);
     } catch (e) {
       console.warn(`[SyncManager] Inventory pull failed for ${collectionId}:`, e);
