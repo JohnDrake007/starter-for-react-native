@@ -94,6 +94,7 @@ export default function VisitDetailScreen() {
 
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   // Basic edit fields
   const [editObservations, setEditObservations] = useState("");
@@ -486,6 +487,38 @@ export default function VisitDetailScreen() {
     }
   };
 
+  const handleDeleteVisit = () => {
+    Alert.alert(
+      "Delete Visit",
+      "Are you sure you want to delete this visit? All recommendations and photos attached to it will also be removed. This action cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            setDeleting(true);
+            try {
+              for (const rec of recommendations) {
+                try { await deleteDocument(RECOMMENDATIONS_COLLECTION_ID, rec.$id); } catch (e) { console.warn("Failed to delete recommendation:", e); }
+              }
+              for (const photo of photos) {
+                try { await deleteDocument(VISIT_PHOTOS_COLLECTION_ID, photo.$id); } catch (e) { console.warn("Failed to delete photo:", e); }
+              }
+              await deleteDocument(VISITS_COLLECTION_ID, id);
+              if (router.canGoBack()) router.back();
+              else router.replace("/(tabs)/home");
+            } catch (e: any) {
+              Alert.alert("Error", e.message || "Failed to delete visit");
+            } finally {
+              setDeleting(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const openMaps = () => {
     const lat = editing ? editLatitude : visitData?.latitude;
     const lng = editing ? editLongitude : visitData?.longitude;
@@ -635,11 +668,14 @@ export default function VisitDetailScreen() {
           </View>
         ) : (
           <View style={{ flexDirection: "row", gap: 8 }}>
-            <TouchableOpacity style={styles.headerAction} onPress={() => setShowShareMenu(!showShareMenu)}>
+            <TouchableOpacity style={styles.headerAction} onPress={() => setShowShareMenu(!showShareMenu)} disabled={deleting}>
               <Share2 color="#16a34a" size={18} />
             </TouchableOpacity>
-            <TouchableOpacity style={styles.headerAction} onPress={startEditing}>
+            <TouchableOpacity style={styles.headerAction} onPress={startEditing} disabled={deleting}>
               <Pencil color="#16a34a" size={18} />
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.headerAction, styles.headerActionRed]} onPress={handleDeleteVisit} disabled={deleting}>
+              <Trash2 color="#dc2626" size={18} />
             </TouchableOpacity>
           </View>
         )}
@@ -1292,9 +1328,16 @@ export default function VisitDetailScreen() {
         ))}
 
         {!editing && (
-          <TouchableOpacity style={styles.editButton} onPress={startEditing}>
+          <TouchableOpacity style={styles.editButton} onPress={startEditing} disabled={deleting}>
             <Pencil color="#16a34a" size={16} />
             <Text style={styles.editButtonText}>Edit Visit</Text>
+          </TouchableOpacity>
+        )}
+
+        {!editing && (
+          <TouchableOpacity style={[styles.deleteButton, deleting && styles.deleteButtonDisabled]} onPress={handleDeleteVisit} disabled={deleting}>
+            <Trash2 color="#dc2626" size={16} />
+            <Text style={styles.deleteButtonText}>{deleting ? "Deleting..." : "Delete Visit"}</Text>
           </TouchableOpacity>
         )}
       </ScrollView>
@@ -1323,6 +1366,7 @@ const styles = StyleSheet.create({
   headerSub: { fontSize: 11, color: "#6b7280" },
   headerAction: { width: 36, height: 36, borderRadius: 18, backgroundColor: "#dcfce780", justifyContent: "center", alignItems: "center" },
   headerActionGreen: { backgroundColor: "#16a34a" },
+  headerActionRed: { backgroundColor: "#fef2f280" },
   headerActionDisabled: { opacity: 0.5 },
   scrollView: { flex: 1 },
   loadingContainer: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#fafafa" },
@@ -1448,6 +1492,9 @@ const styles = StyleSheet.create({
   saveButtonText: { fontSize: 15, fontWeight: "700", color: "#fff" },
   editButton: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 14, borderRadius: 14, backgroundColor: "#ecfdf5", borderWidth: 1, borderColor: "#16a34a30" },
   editButtonText: { fontSize: 14, fontWeight: "600", color: "#16a34a" },
+  deleteButton: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 14, borderRadius: 14, backgroundColor: "#fef2f2", borderWidth: 1, borderColor: "#dc262630" },
+  deleteButtonDisabled: { opacity: 0.5 },
+  deleteButtonText: { fontSize: 14, fontWeight: "600", color: "#dc2626" },
   obsHint: { fontSize: 10, color: "#9ca3af", marginTop: 2, fontStyle: "italic" },
   // ── Prescription view styles ──────────────────────────────────────────────
   prescriptionContainer: { gap: 0 },
