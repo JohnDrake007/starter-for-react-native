@@ -46,10 +46,17 @@ const getCategoryIcon = (category: string | null | undefined) => {
   }
 };
 
-// Parse Tally date formats: "20250630", "30-06-2025", or ISO
+// Month abbreviation lookup for Tally's dd-Mon-YYYY format
+const MONTH_ABBR: Record<string, number> = {
+  jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+  jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+};
+
+// Parse Tally date formats: "20250630", "30-06-2025", "1-Dec-2025", or ISO
 function parseBatchDate(dateStr: string): Date | null {
   if (!dateStr || dateStr.trim() === "") return null;
   const s = dateStr.trim();
+  // YYYYMMDD (e.g. "20250630")
   if (/^\d{8}$/.test(s)) {
     const y = parseInt(s.slice(0, 4));
     const m = parseInt(s.slice(4, 6)) - 1;
@@ -57,11 +64,22 @@ function parseBatchDate(dateStr: string): Date | null {
     const dt = new Date(y, m, d);
     return isNaN(dt.getTime()) ? null : dt;
   }
+  // dd-Mon-YYYY or dd/Mon/YYYY (Tally EXPIRYPERIOD format, e.g. "1-Dec-2025")
+  const dMonY = s.match(/^(\d{1,2})[-/]([A-Za-z]{3,9})[-/](\d{4})$/);
+  if (dMonY) {
+    const monthIdx = MONTH_ABBR[dMonY[2].slice(0, 3).toLowerCase()];
+    if (monthIdx !== undefined) {
+      const dt = new Date(parseInt(dMonY[3]), monthIdx, parseInt(dMonY[1]));
+      return isNaN(dt.getTime()) ? null : dt;
+    }
+  }
+  // DD-MM-YYYY or DD/MM/YYYY
   const dmy = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
   if (dmy) {
     const dt = new Date(parseInt(dmy[3]), parseInt(dmy[2]) - 1, parseInt(dmy[1]));
     return isNaN(dt.getTime()) ? null : dt;
   }
+  // Fallback: ISO or any format Date() can parse
   const dt = new Date(s);
   return isNaN(dt.getTime()) ? null : dt;
 }
