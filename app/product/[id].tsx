@@ -56,7 +56,10 @@ const MONTH_ABBR: Record<string, number> = {
   jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
 };
 
-// Parse Tally date formats: "20250630", "30-06-2025", "1-Dec-2025", or ISO
+// Parse Tally date formats: "20250630", "30-06-2025", "1-Dec-2025", "1-Dec-25",
+// "1 Dec 2025", or ISO. Tally's EXPIRYPERIOD is often dd-Mon-YY (2-digit year),
+// which Hermes' Date parser rejects — so we handle it explicitly rather than
+// relying on the new Date() fallback.
 function parseTallyDate(dateStr: string): Date | null {
   if (!dateStr || dateStr.trim() === "") return null;
   const s = dateStr.trim();
@@ -68,19 +71,24 @@ function parseTallyDate(dateStr: string): Date | null {
     const dt = new Date(y, m, d);
     return isNaN(dt.getTime()) ? null : dt;
   }
-  // dd-Mon-YYYY or dd/Mon/YYYY (Tally EXPIRYPERIOD format, e.g. "1-Dec-2025")
-  const dMonY = s.match(/^(\d{1,2})[-/]([A-Za-z]{3,9})[-/](\d{4})$/);
+  // dd-Mon-YYYY or dd-Mon-YY (Tally EXPIRYPERIOD, e.g. "1-Dec-2025" / "1-Dec-25").
+  // Separators may be dash, slash, or space; month is 3-9 letters; year 2 or 4 digits.
+  const dMonY = s.match(/^(\d{1,2})[\s\-\/]([A-Za-z]{3,9})[\s\-\/](\d{2,4})$/);
   if (dMonY) {
     const monthIdx = MONTH_ABBR[dMonY[2].slice(0, 3).toLowerCase()];
     if (monthIdx !== undefined) {
-      const dt = new Date(parseInt(dMonY[3]), monthIdx, parseInt(dMonY[1]));
+      let year = parseInt(dMonY[3]);
+      if (year < 100) year += 2000; // 2-digit year pivot (expiries are recent/future)
+      const dt = new Date(year, monthIdx, parseInt(dMonY[1]));
       return isNaN(dt.getTime()) ? null : dt;
     }
   }
-  // DD-MM-YYYY or DD/MM/YYYY
-  const dmy = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+  // DD-MM-YYYY or DD-MM-YY (numeric day-month-year)
+  const dmy = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})$/);
   if (dmy) {
-    const dt = new Date(parseInt(dmy[3]), parseInt(dmy[2]) - 1, parseInt(dmy[1]));
+    let year = parseInt(dmy[3]);
+    if (year < 100) year += 2000;
+    const dt = new Date(year, parseInt(dmy[2]) - 1, parseInt(dmy[1]));
     return isNaN(dt.getTime()) ? null : dt;
   }
   // Fallback: ISO or any format Date() can parse
@@ -258,7 +266,9 @@ export default function ProductDetailScreen() {
   };
 
   const formatDate = (dateStr: string) => {
-    try { return new Date(dateStr).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }); }
+    const d = parseTallyDate(dateStr);
+    if (!d) return dateStr;
+    try { return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }); }
     catch { return dateStr; }
   };
 
@@ -283,7 +293,7 @@ export default function ProductDetailScreen() {
   }
 
   const colors = getCategoryColor(product.category);
-  const daysUntilExpiry = product.expiryDate ? Math.ceil((new Date(product.expiryDate).getTime() - Date.now()) / (1000 * 3600 * 24)) : null;
+  const daysUntilExpiry = product.expiryDate ? (() => { const d = parseTallyDate(product.expiryDate); return d ? Math.ceil((d.getTime() - Date.now()) / (1000 * 3600 * 24)) : null; })() : null;
   const isExpired = daysUntilExpiry !== null && daysUntilExpiry < 0;
   const isUrgent = daysUntilExpiry !== null && daysUntilExpiry >= 0 && daysUntilExpiry <= 30;
 

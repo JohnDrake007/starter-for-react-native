@@ -18,7 +18,7 @@ interface Item {
 }
 
 const categories = ["All", "Fertilizer", "Insecticide", "Fungicide", "Herbicide", "PGR", "Organic", "Micronutrient", "Other"];
-const expirySteps = [7, 15, 30, 60, 90, 180, 365];
+const expirySteps = [0, 7, 15, 30, 60, 90, 180, 365];
 
 const getCategoryColor = (category: string | null | undefined) => {
   switch (category) {
@@ -52,7 +52,10 @@ const MONTH_ABBR: Record<string, number> = {
   jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
 };
 
-// Parse Tally date formats: "20250630", "30-06-2025", "1-Dec-2025", or ISO
+// Parse Tally date formats: "20250630", "30-06-2025", "1-Dec-2025", "1-Dec-25",
+// "1 Dec 2025", or ISO. Tally's EXPIRYPERIOD is often dd-Mon-YY (2-digit year),
+// which Hermes' Date parser rejects — so we handle it explicitly rather than
+// relying on the new Date() fallback.
 function parseBatchDate(dateStr: string): Date | null {
   if (!dateStr || dateStr.trim() === "") return null;
   const s = dateStr.trim();
@@ -64,19 +67,24 @@ function parseBatchDate(dateStr: string): Date | null {
     const dt = new Date(y, m, d);
     return isNaN(dt.getTime()) ? null : dt;
   }
-  // dd-Mon-YYYY or dd/Mon/YYYY (Tally EXPIRYPERIOD format, e.g. "1-Dec-2025")
-  const dMonY = s.match(/^(\d{1,2})[-/]([A-Za-z]{3,9})[-/](\d{4})$/);
+  // dd-Mon-YYYY or dd-Mon-YY (Tally EXPIRYPERIOD, e.g. "1-Dec-2025" / "1-Dec-25").
+  // Separators may be dash, slash, or space; month is 3-9 letters; year 2 or 4 digits.
+  const dMonY = s.match(/^(\d{1,2})[\s\-\/]([A-Za-z]{3,9})[\s\-\/](\d{2,4})$/);
   if (dMonY) {
     const monthIdx = MONTH_ABBR[dMonY[2].slice(0, 3).toLowerCase()];
     if (monthIdx !== undefined) {
-      const dt = new Date(parseInt(dMonY[3]), monthIdx, parseInt(dMonY[1]));
+      let year = parseInt(dMonY[3]);
+      if (year < 100) year += 2000; // 2-digit year pivot (expiries are recent/future)
+      const dt = new Date(year, monthIdx, parseInt(dMonY[1]));
       return isNaN(dt.getTime()) ? null : dt;
     }
   }
-  // DD-MM-YYYY or DD/MM/YYYY
-  const dmy = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+  // DD-MM-YYYY or DD-MM-YY (numeric day-month-year)
+  const dmy = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})$/);
   if (dmy) {
-    const dt = new Date(parseInt(dmy[3]), parseInt(dmy[2]) - 1, parseInt(dmy[1]));
+    let year = parseInt(dmy[3]);
+    if (year < 100) year += 2000;
+    const dt = new Date(year, parseInt(dmy[2]) - 1, parseInt(dmy[1]));
     return isNaN(dt.getTime()) ? null : dt;
   }
   // Fallback: ISO or any format Date() can parse
@@ -160,19 +168,26 @@ export default function ProductCatalogScreen() {
         if (!item.name.toLowerCase().includes(q)) return false;
       }
       if (expiryDays !== null) {
-        // Prefer batch-level expiry; fall back to item-level
-        const expiryRef = item.earliestBatchExpiry ?? (item.expiryDate ? new Date(item.expiryDate) : null);
+        // Prefer batch-level expiry; fall back to item-level (parse via parseBatchDate
+        // so Tally formats like "1-Dec-25" work — raw new Date() fails on Hermes)
+        const expiryRef = item.earliestBatchExpiry ?? (item.expiryDate ? parseBatchDate(item.expiryDate) : null);
         if (!expiryRef) return false; // filter active but no expiry data — exclude
         const daysUntil = Math.ceil((expiryRef.getTime() - Date.now()) / (1000 * 3600 * 24));
-        if (daysUntil > expiryDays || daysUntil < 0) return false;
+        if (expiryDays === 0) {
+          // "Expired" filter: show only already-expired stock
+          if (daysUntil >= 0) return false;
+        } else {
+          // N-day window: show stock expiring within N days (not yet expired)
+          if (daysUntil > expiryDays || daysUntil < 0) return false;
+        }
       }
       return true;
     })
     // When FEFO filter is active, sort by earliest expiry ascending
     .sort((a, b) => {
-      if (!expiryDays) return 0; // default order when no filter
-      const aExp = a.earliestBatchExpiry ?? (a.expiryDate ? new Date(a.expiryDate) : null);
-      const bExp = b.earliestBatchExpiry ?? (b.expiryDate ? new Date(b.expiryDate) : null);
+      if (expiryDays === null) return 0; // default order when no filter
+      const aExp = a.earliestBatchExpiry ?? (a.expiryDate ? parseBatchDate(a.expiryDate) : null);
+      const bExp = b.earliestBatchExpiry ?? (b.expiryDate ? parseBatchDate(b.expiryDate) : null);
       if (!aExp && !bExp) return 0;
       if (!aExp) return 1;
       if (!bExp) return -1;
@@ -235,7 +250,9 @@ export default function ProductCatalogScreen() {
               </View>
             )}
             {item.expiryDate && (() => {
-              const daysUntil = Math.ceil((new Date(item.expiryDate).getTime() - Date.now()) / (1000 * 3600 * 24));
+              const parsed = parseBatchDate(item.expiryDate);
+              if (!parsed) return null;
+              const daysUntil = Math.ceil((parsed.getTime() - Date.now()) / (1000 * 3600 * 24));
               if (isNaN(daysUntil)) return null;
               const isExpired = daysUntil < 0;
               const isUrgent = daysUntil >= 0 && daysUntil <= 30;
