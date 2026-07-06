@@ -3,9 +3,10 @@ import { useState, useCallback } from "react";
 import { useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArrowLeft, Search, Package, Tag, Beaker, Share2, Plus, X, Calendar, Clock } from "@/components/Icons";
-import { ITEMS_COLLECTION_ID, INVENTORY_ITEMS_COLLECTION_ID, INVENTORY_BATCHES_COLLECTION_ID } from "@/lib/appwrite";
+import { INVENTORY_ITEMS_COLLECTION_ID, INVENTORY_BATCHES_COLLECTION_ID } from "@/lib/appwrite";
 import { getCollection, syncInventoryCollections } from "@/lib/sync-manager";
 import { useNetwork } from "@/lib/network-provider";
+import { normalizeCategory, parseQty } from "@/lib/inventory-utils";
 
 interface Item {
   $id: string;
@@ -13,8 +14,8 @@ interface Item {
   category?: string;
   unit?: string;
   tallyCode?: string;
-  expiryDate?: string;
   earliestBatchExpiry?: Date | null; // FEFO: earliest batch expiry date
+  inStock?: boolean; // true → has non-zero closing_qty
 }
 
 const categories = ["All", "Fertilizer", "Insecticide", "Fungicide", "Herbicide", "PGR", "Organic", "Micronutrient", "Other"];
@@ -105,16 +106,10 @@ export default function ProductCatalogScreen() {
 
   const fetchItems = useCallback(async () => {
     try {
-      const allItems = getCollection(ITEMS_COLLECTION_ID).sort((a, b) => 
-        new Date(b.$createdAt).getTime() - new Date(a.$createdAt).getTime()
-      );
-
-      // Build a map of item name -> earliest batch expiry (FEFO)
       const allInvItems = getCollection(INVENTORY_ITEMS_COLLECTION_ID);
       const allBatches = getCollection(INVENTORY_BATCHES_COLLECTION_ID);
-      const invItemByName: Record<string, any> = {};
-      allInvItems.forEach((inv: any) => { invItemByName[inv.item_name?.toLowerCase()] = inv; });
 
+      // Collect earliest batch expiry per item_guid (FEFO)
       const batchesByGuid: Record<string, Date[]> = {};
       allBatches.forEach((b: any) => {
         if (!b.expiry_date || !b.item_guid) return;
@@ -123,24 +118,30 @@ export default function ProductCatalogScreen() {
         if (!batchesByGuid[b.item_guid]) batchesByGuid[b.item_guid] = [];
         batchesByGuid[b.item_guid].push(d);
       });
+      const earliestForGuid = (guid: string | undefined): Date | null => {
+        if (!guid || !batchesByGuid[guid]?.length) return null;
+        return batchesByGuid[guid].slice().sort((a, b) => a.getTime() - b.getTime())[0];
+      };
 
-      setItems(allItems.map((d) => {
-        const invItem = invItemByName[d.name?.toLowerCase()];
-        let earliestBatchExpiry: Date | null = null;
-        if (invItem && batchesByGuid[invItem.guid]?.length) {
-          const sorted = batchesByGuid[invItem.guid].slice().sort((a, b) => a.getTime() - b.getTime());
-          earliestBatchExpiry = sorted[0];
-        }
-        return {
-          $id: d.$id,
-          name: d.name,
-          category: d.category || undefined,
-          unit: d.unit || undefined,
-          tallyCode: d.tallyCode || undefined,
-          expiryDate: d.expiryDate || undefined,
-          earliestBatchExpiry,
-        };
-      }));
+      const out: Item[] = allInvItems
+        .filter((inv: any) => inv.item_name)
+        .map((inv: any) => ({
+          $id: inv.$id,
+          name: inv.item_name,
+          category: normalizeCategory(inv.stock_group),
+          unit: inv.base_unit || undefined,
+          tallyCode: inv.guid || undefined,
+          earliestBatchExpiry: earliestForGuid(inv.guid),
+          inStock: parseQty(inv.closing_qty) > 0,
+        }));
+
+      // In-stock first, then alphabetical
+      out.sort((a, b) => {
+        if (a.inStock !== b.inStock) return a.inStock ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+
+      setItems(out);
     } catch {}
     setLoading(false);
   }, []);
@@ -159,7 +160,7 @@ export default function ProductCatalogScreen() {
     setRefreshing(false);
   }, [fetchItems, syncNow]);
 
-  // FEFO filter: filter by batch-level expiry (earliest expiring batch), falling back to item-level expiryDate
+  // FEFO filter: filter by batch-level expiry (earliest expiring batch)
   const filteredItems = items
     .filter((item) => {
       if (selectedCategory !== "All" && item.category !== selectedCategory) return false;
@@ -168,10 +169,9 @@ export default function ProductCatalogScreen() {
         if (!item.name.toLowerCase().includes(q)) return false;
       }
       if (expiryDays !== null) {
-        // Prefer batch-level expiry; fall back to item-level (parse via parseBatchDate
-        // so Tally formats like "1-Dec-25" work — raw new Date() fails on Hermes)
-        const expiryRef = item.earliestBatchExpiry ?? (item.expiryDate ? parseBatchDate(item.expiryDate) : null);
-        if (!expiryRef) return false; // filter active but no expiry data — exclude
+        // FEFO: filter by the earliest batch expiry date (no item-level expiry anymore)
+        const expiryRef = item.earliestBatchExpiry;
+        if (!expiryRef) return false; // filter active but no batch expiry — exclude
         const daysUntil = Math.ceil((expiryRef.getTime() - Date.now()) / (1000 * 3600 * 24));
         if (expiryDays === 0) {
           // "Expired" filter: show only already-expired stock
@@ -186,12 +186,10 @@ export default function ProductCatalogScreen() {
     // When FEFO filter is active, sort by earliest expiry ascending
     .sort((a, b) => {
       if (expiryDays === null) return 0; // default order when no filter
-      const aExp = a.earliestBatchExpiry ?? (a.expiryDate ? parseBatchDate(a.expiryDate) : null);
-      const bExp = b.earliestBatchExpiry ?? (b.expiryDate ? parseBatchDate(b.expiryDate) : null);
-      if (!aExp && !bExp) return 0;
-      if (!aExp) return 1;
-      if (!bExp) return -1;
-      return aExp.getTime() - bExp.getTime();
+      if (!a.earliestBatchExpiry && !b.earliestBatchExpiry) return 0;
+      if (!a.earliestBatchExpiry) return 1;
+      if (!b.earliestBatchExpiry) return -1;
+      return a.earliestBatchExpiry.getTime() - b.earliestBatchExpiry.getTime();
     });
 
   const shareProductWhatsApp = (item: Item) => {
@@ -249,10 +247,12 @@ export default function ProductCatalogScreen() {
                 <Text style={styles.unitText}>{item.unit}</Text>
               </View>
             )}
-            {item.expiryDate && (() => {
-              const parsed = parseBatchDate(item.expiryDate);
-              if (!parsed) return null;
-              const daysUntil = Math.ceil((parsed.getTime() - Date.now()) / (1000 * 3600 * 24));
+            {(() => {
+              // Show expiry badge from the earliest batch (FEFO) — expiry lives
+              // only in inventory_batches now; there is no item-level expiryDate.
+              const expiryRef = item.earliestBatchExpiry;
+              if (!expiryRef) return null;
+              const daysUntil = Math.ceil((expiryRef.getTime() - Date.now()) / (1000 * 3600 * 24));
               if (isNaN(daysUntil)) return null;
               const isExpired = daysUntil < 0;
               const isUrgent = daysUntil >= 0 && daysUntil <= 30;

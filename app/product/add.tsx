@@ -1,11 +1,11 @@
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Platform } from "react-native";
-import { useState, useRef } from "react";
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator } from "react-native";
+import { useState } from "react";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ArrowLeft, Plus, Calendar, X } from "@/components/Icons";
-import { ITEMS_COLLECTION_ID } from "@/lib/appwrite";
+import { ArrowLeft, Plus } from "@/components/Icons";
+import { INVENTORY_ITEMS_COLLECTION_ID } from "@/lib/appwrite";
 import { createDocument } from "@/lib/sync-manager";
-import DateTimePicker from "@react-native-community/datetimepicker";
+import { generateAppGuid } from "@/lib/inventory-utils";
 
 const categories = ["Fertilizer", "Insecticide", "Fungicide", "Herbicide", "PGR", "Organic", "Micronutrient", "Other"];
 const units = ["kg", "g", "L", "ml", "packet", "bottle", "bag", "tablet", "piece"];
@@ -16,11 +16,7 @@ export default function AddProductScreen() {
   const [name, setName] = useState("");
   const [category, setCategory] = useState("");
   const [unit, setUnit] = useState("");
-  const [expiryDate, setExpiryDate] = useState("");
-  const [showDatePicker, setShowDatePicker] = useState(false);
   const [saving, setSaving] = useState(false);
-  // Guard against Android DateTimePicker double-fire
-  const datePickerHandled = useRef(false);
 
   const handleSave = async () => {
     if (!name.trim()) {
@@ -29,11 +25,19 @@ export default function AddProductScreen() {
     }
     setSaving(true);
     try {
-      await createDocument(ITEMS_COLLECTION_ID, {
-        name: name.trim(),
-        category: category || null,
-        unit: unit || null,
-        expiryDate: expiryDate || null,
+      // Write to inventory_items. guid is required + unique; use a prefixed
+      // app-generated guid so it never collides with Tally-managed guids and
+      // is never overwritten by a Tally sync (Tally upserts only its own guids).
+      await createDocument(INVENTORY_ITEMS_COLLECTION_ID, {
+        item_name: name.trim(),
+        stock_group: category || "",
+        base_unit: unit || "",
+        guid: generateAppGuid(),
+        alter_id: 0,
+        opening_qty: "",
+        closing_qty: "",
+        opening_value: 0,
+        closing_value: 0,
       });
       router.back();
     } catch (e: any) {
@@ -41,27 +45,6 @@ export default function AddProductScreen() {
     } finally {
       setSaving(false);
     }
-  };
-
-  const openDatePicker = () => {
-    datePickerHandled.current = false;
-    setShowDatePicker(true);
-  };
-
-  const onDateChange = (_event: any, date?: Date) => {
-    if (datePickerHandled.current) return;
-    datePickerHandled.current = true;
-    setShowDatePicker(false);
-    if (date) {
-      setExpiryDate(date.toISOString().split("T")[0]);
-    }
-  };
-
-  const formatDisplayDate = (d: string) => {
-    if (!d) return "";
-    try {
-      return new Date(d).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
-    } catch { return d; }
   };
 
   return (
@@ -119,28 +102,7 @@ export default function AddProductScreen() {
           </View>
         </View>
 
-        <View style={styles.fieldGroup}>
-          <Text style={styles.label}>Expiry Date</Text>
-          <TouchableOpacity style={styles.inputRow} onPress={openDatePicker}>
-            <Calendar color={expiryDate ? "#16a34a" : "#9ca3af"} size={16} />
-            <Text style={[styles.input, { flex: 1 }, expiryDate ? styles.dateSelected : styles.datePlaceholder]}>
-              {expiryDate ? formatDisplayDate(expiryDate) : "Select expiry date"}
-            </Text>
-            {expiryDate ? (
-              <TouchableOpacity onPress={() => setExpiryDate("")} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                <X color="#9ca3af" size={14} />
-              </TouchableOpacity>
-            ) : null}
-          </TouchableOpacity>
-          {showDatePicker && (
-            <DateTimePicker
-              value={expiryDate ? new Date(expiryDate) : new Date()}
-              mode="date"
-              display={Platform.OS === "ios" ? "inline" : "default"}
-              onChange={onDateChange}
-            />
-          )}
-        </View>
+        <Text style={styles.hint}>Expiry is tracked per batch (synced from Tally). It can be viewed on the product detail screen.</Text>
       </ScrollView>
 
       <View style={[styles.footer, { paddingBottom: insets.bottom + 12 }]}>
@@ -173,8 +135,7 @@ const styles = StyleSheet.create({
   label: { fontSize: 13, fontWeight: "600", color: "#374151" },
   inputRow: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "#fff", borderRadius: 14, paddingHorizontal: 14, height: 48, borderWidth: 1, borderColor: "#e5e7eb" },
   input: { flex: 1, fontSize: 14, color: "#1a1a2e" },
-  dateSelected: { color: "#1a1a2e" },
-  datePlaceholder: { color: "#9ca3af" },
+  hint: { fontSize: 11, color: "#9ca3af", fontStyle: "italic", paddingHorizontal: 4 },
   chipRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   chip: { paddingVertical: 7, paddingHorizontal: 14, borderRadius: 20, backgroundColor: "#f3f4f6", borderWidth: 1, borderColor: "transparent" },
   chipActive: { backgroundColor: "#ecfdf5", borderColor: "#16a34a40" },

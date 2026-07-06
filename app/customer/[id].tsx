@@ -3,9 +3,10 @@ import { useState, useCallback } from "react";
 import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArrowLeft, Phone, MapPin, Sprout, Calendar, Package, Share2, Pencil, Check, X, PlusCircle, ExternalLink, Eye, Camera, ArrowRight, Users, TrendingUp, TrendingDown, IndianRupee } from "@/components/Icons";
-import { CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, ITEMS_COLLECTION_ID } from "@/lib/appwrite";
+import { CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, INVENTORY_ITEMS_COLLECTION_ID } from "@/lib/appwrite";
 import { getCollection, getDocument, updateDocument } from "@/lib/sync-manager";
 import { useNetwork } from "@/lib/network-provider";
+import { normalizeCategory } from "@/lib/inventory-utils";
 
 interface VisitItem {
   $id: string;
@@ -77,8 +78,9 @@ export default function CustomerDetailScreen() {
 
       let allItemNames: Record<string, { name: string; category?: string }> = {};
       try {
-        const itemsRes = getCollection(ITEMS_COLLECTION_ID);
-        itemsRes.forEach((item) => { allItemNames[item.$id] = { name: item.name, category: item.category }; });
+        getCollection(INVENTORY_ITEMS_COLLECTION_ID).forEach((i: any) => {
+          allItemNames[i.$id] = { name: i.item_name, category: normalizeCategory(i.stock_group) };
+        });
       } catch {}
 
       const visitItems: VisitItem[] = [];

@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { databases, storage, ID, Query, DATABASE_ID, CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, ITEMS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, VISIT_PHOTOS_COLLECTION_ID, INVENTORY_ITEMS_COLLECTION_ID, INVENTORY_BATCHES_COLLECTION_ID } from "./appwrite";
+import { databases, storage, Query, DATABASE_ID, CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, VISIT_PHOTOS_COLLECTION_ID, INVENTORY_ITEMS_COLLECTION_ID, INVENTORY_BATCHES_COLLECTION_ID } from "./appwrite";
 // Lazy import to avoid circular deps — imported inline in syncNow
 let _scheduleVisitReminders: (() => Promise<void>) | null = null;
 async function refreshNotifications() {
@@ -16,7 +16,6 @@ async function refreshNotifications() {
 const STORAGE_KEYS: Record<string, string> = {
   [CUSTOMERS_COLLECTION_ID]: "@fa_customers",
   [VISITS_COLLECTION_ID]: "@fa_visits",
-  [ITEMS_COLLECTION_ID]: "@fa_items",
   [RECOMMENDATIONS_COLLECTION_ID]: "@fa_recommendations",
   [VISIT_PHOTOS_COLLECTION_ID]: "@fa_visit_photos",
   [INVENTORY_ITEMS_COLLECTION_ID]: "@fa_inventory_items",
@@ -53,7 +52,6 @@ type SyncListener = (status: SyncStatus, info?: string) => void;
 const SYNCABLE_COLLECTIONS = [
   CUSTOMERS_COLLECTION_ID,
   VISITS_COLLECTION_ID,
-  ITEMS_COLLECTION_ID,
   RECOMMENDATIONS_COLLECTION_ID,
   VISIT_PHOTOS_COLLECTION_ID,
 ];
@@ -73,6 +71,33 @@ const listeners: Set<SyncListener> = new Set();
 let initialized = false;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Generate a cryptographically strong unique ID suitable for Appwrite documents.
+ * Uses crypto.getRandomValues (available in Hermes & JSC) for proper entropy,
+ * avoiding the weak Math.random()-based IDs from the SDK's ID.unique().
+ * Format: 13-char hex timestamp + 20 random hex chars = 33 chars (≤ 36 limit).
+ */
+function generateDocumentId(): string {
+  const now = new Date();
+  const sec = Math.floor(now.getTime() / 1000);
+  const msec = now.getMilliseconds();
+  const hexTimestamp = sec.toString(16) + msec.toString(16).padStart(5, '0');
+
+  let randomHex = '';
+  if (typeof globalThis.crypto !== 'undefined' && crypto.getRandomValues) {
+    const bytes = new Uint8Array(10); // 10 bytes = 20 hex chars
+    crypto.getRandomValues(bytes);
+    bytes.forEach((b) => { randomHex += b.toString(16).padStart(2, '0'); });
+  } else {
+    // Fallback: multiple Math.random() calls for better entropy
+    for (let i = 0; i < 20; i++) {
+      randomHex += Math.floor(Math.random() * 16).toString(16);
+    }
+  }
+  return hexTimestamp + randomHex;
+}
+
 function generateLocalId(): string {
   return `local_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 }
@@ -131,7 +156,7 @@ async function createServerDocument(
       return await databases.createDocument(
         DATABASE_ID,
         collectionId,
-        ID.unique(20),
+        generateDocumentId(),
         data
       );
     } catch (e: any) {
@@ -382,7 +407,7 @@ export async function enqueuePhotoUpload(meta: PendingMutation["photoMeta"]): Pr
   if (!meta) return;
 
   try {
-    const uploaded = await storage.createFile(meta.bucketId, ID.unique(20), {
+    const uploaded = await storage.createFile(meta.bucketId, generateDocumentId(), {
       name: meta.fileName,
       type: meta.mimeType,
       size: meta.fileSize,
@@ -568,7 +593,7 @@ async function pushPhotoUpload(
   const resolvedVisitId = idMap[meta.visitId] || meta.visitId;
 
   // Upload file to storage
-  const uploaded = await storage.createFile(meta.bucketId, ID.unique(20), {
+  const uploaded = await storage.createFile(meta.bucketId, generateDocumentId(), {
     name: meta.fileName,
     type: meta.mimeType,
     size: meta.fileSize,

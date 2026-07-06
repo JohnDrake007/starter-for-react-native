@@ -1,12 +1,12 @@
-import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity, Alert, Linking, TextInput, Platform } from "react-native";
-import { useState, useCallback, useRef } from "react";
+import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity, Alert, Linking, TextInput } from "react-native";
+import { useState, useCallback } from "react";
 import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ArrowLeft, Package, Tag, Beaker, Calendar, Clock, Pencil, Check, X, Share2 } from "@/components/Icons";
-import DateTimePicker from "@react-native-community/datetimepicker";
-import { ITEMS_COLLECTION_ID, INVENTORY_ITEMS_COLLECTION_ID, INVENTORY_BATCHES_COLLECTION_ID } from "@/lib/appwrite";
+import { ArrowLeft, Package, Tag, Beaker, Clock, Pencil, Check, X, Share2 } from "@/components/Icons";
+import { INVENTORY_ITEMS_COLLECTION_ID, INVENTORY_BATCHES_COLLECTION_ID } from "@/lib/appwrite";
 import { getDocument, updateDocument, getCollection, syncInventoryCollections } from "@/lib/sync-manager";
 import { useNetwork } from "@/lib/network-provider";
+import { normalizeCategory } from "@/lib/inventory-utils";
 
 const categories = ["Fertilizer", "Insecticide", "Fungicide", "Herbicide", "PGR", "Organic", "Micronutrient", "Other"];
 const units = ["kg", "g", "L", "ml", "packet", "bottle", "bag", "tablet", "piece"];
@@ -120,62 +120,58 @@ export default function ProductDetailScreen() {
   const [editName, setEditName] = useState("");
   const [editCategory, setEditCategory] = useState("");
   const [editUnit, setEditUnit] = useState("");
-  const [editTallyCode, setEditTallyCode] = useState("");
-  const [editExpiryDate, setEditExpiryDate] = useState("");
-  const [showExpiryDatePicker, setShowExpiryDatePicker] = useState(false);
-  const expiryDatePickerHandled = useRef(false);
 
   const loadData = useCallback(async () => {
     if (!id) return;
     try {
-      const doc = getDocument(ITEMS_COLLECTION_ID, id);
-      if (doc) {
+      const allInvItems = getCollection(INVENTORY_ITEMS_COLLECTION_ID);
+      const allBatches = getCollection(INVENTORY_BATCHES_COLLECTION_ID);
+
+      // The product IS an inventory_items document (the catalog's only source now)
+      const invItem: any = getDocument(INVENTORY_ITEMS_COLLECTION_ID, id) ||
+        allInvItems.find((i: any) => i.$id === id);
+
+      if (invItem) {
+        const doc = {
+          $id: invItem.$id,
+          name: invItem.item_name || "",
+          category: normalizeCategory(invItem.stock_group),
+          unit: invItem.base_unit || undefined,
+          tallyCode: invItem.guid || undefined,
+          closing_qty: invItem.closing_qty,
+          opening_qty: invItem.opening_qty,
+          closing_value: invItem.closing_value,
+        };
         setProduct(doc);
-        setEditName(doc.name || "");
+        setInventoryItem(invItem);
+        setEditName(doc.name);
         setEditCategory(doc.category || "");
         setEditUnit(doc.unit || "");
-        setEditTallyCode(doc.tallyCode || "");
-        setEditExpiryDate(doc.expiryDate || "");
 
-        const allInvItems = getCollection(INVENTORY_ITEMS_COLLECTION_ID);
-        let invItem: any = null;
-        if (doc.tallyCode) {
-          invItem = allInvItems.find((i: any) => i.item_name === doc.name || i.guid === doc.tallyCode);
-        }
-        if (!invItem) {
-          invItem = allInvItems.find((i: any) => i.item_name?.toLowerCase() === doc.name?.toLowerCase());
-        }
-        setInventoryItem(invItem || null);
-
-        if (invItem) {
-          const allBatches = getCollection(INVENTORY_BATCHES_COLLECTION_ID);
-          const itemBatches = allBatches
-            .filter((b: any) => b.item_guid === invItem.guid)
-            .map((b: any) => {
-              let daysUntilExpiry: number | null = null;
-              if (b.expiry_date) {
-                const parsed = parseTallyDate(b.expiry_date);
-                if (parsed) {
-                  daysUntilExpiry = Math.ceil((parsed.getTime() - Date.now()) / (1000 * 3600 * 24));
-                }
+        const itemBatches = allBatches
+          .filter((b: any) => b.item_guid === invItem.guid)
+          .map((b: any) => {
+            let daysUntilExpiry: number | null = null;
+            if (b.expiry_date) {
+              const parsed = parseTallyDate(b.expiry_date);
+              if (parsed) {
+                daysUntilExpiry = Math.ceil((parsed.getTime() - Date.now()) / (1000 * 3600 * 24));
               }
-              return { ...b, daysUntilExpiry };
-            })
-            .sort((a: any, b: any) => {
-              if (!a.expiry_date && !b.expiry_date) return 0;
-              if (!a.expiry_date) return 1;
-              if (!b.expiry_date) return -1;
-              const aDate = parseTallyDate(a.expiry_date);
-              const bDate = parseTallyDate(b.expiry_date);
-              if (!aDate && !bDate) return 0;
-              if (!aDate) return 1;
-              if (!bDate) return -1;
-              return aDate.getTime() - bDate.getTime();
-            });
-          setBatches(itemBatches);
-        } else {
-          setBatches([]);
-        }
+            }
+            return { ...b, daysUntilExpiry };
+          })
+          .sort((a: any, b: any) => {
+            if (!a.expiry_date && !b.expiry_date) return 0;
+            if (!a.expiry_date) return 1;
+            if (!b.expiry_date) return -1;
+            const aDate = parseTallyDate(a.expiry_date);
+            const bDate = parseTallyDate(b.expiry_date);
+            if (!aDate && !bDate) return 0;
+            if (!aDate) return 1;
+            if (!bDate) return -1;
+            return aDate.getTime() - bDate.getTime();
+          });
+        setBatches(itemBatches);
       }
     } catch {}
     setLoading(false);
@@ -200,42 +196,23 @@ export default function ProductDetailScreen() {
     setEditName(product.name || "");
     setEditCategory(product.category || "");
     setEditUnit(product.unit || "");
-    setEditTallyCode(product.tallyCode || "");
-    setEditExpiryDate(product.expiryDate || "");
     setEditing(true);
   };
 
   const cancelEditing = () => {
     setEditing(false);
-    setShowExpiryDatePicker(false);
-  };
-
-  const openExpiryDatePicker = () => {
-    expiryDatePickerHandled.current = false;
-    setShowExpiryDatePicker(true);
-  };
-
-  const onExpiryDateChange = (_event: any, date?: Date) => {
-    if (expiryDatePickerHandled.current) return;
-    expiryDatePickerHandled.current = true;
-    setShowExpiryDatePicker(false);
-    if (date) {
-      setEditExpiryDate(date.toISOString().split("T")[0]);
-    }
   };
 
   const saveEdits = async () => {
     if (!editName.trim()) { Alert.alert("Error", "Product name is required"); return; }
     setSaving(true);
     try {
-      await updateDocument(ITEMS_COLLECTION_ID, id, {
-        name: editName.trim(),
-        category: editCategory || null,
-        unit: editUnit || null,
-        tallyCode: editTallyCode.trim() || null,
-        expiryDate: editExpiryDate.trim() || null,
+      // Write back to inventory_items (stock_group holds the category, base_unit the unit)
+      await updateDocument(INVENTORY_ITEMS_COLLECTION_ID, id, {
+        item_name: editName.trim(),
+        stock_group: editCategory || "",
+        base_unit: editUnit || "",
       });
-      await syncNow();
       setEditing(false);
       await loadData();
     } catch (e: any) {
@@ -265,13 +242,6 @@ export default function ProductDetailScreen() {
     Linking.openURL("https://wa.me/?text=" + encodeURIComponent(lines.join("\n")));
   };
 
-  const formatDate = (dateStr: string) => {
-    const d = parseTallyDate(dateStr);
-    if (!d) return dateStr;
-    try { return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }); }
-    catch { return dateStr; }
-  };
-
   if (loading) {
     return (
       <View style={[styles.loadingContainer, { paddingTop: insets.top }]}>
@@ -293,9 +263,6 @@ export default function ProductDetailScreen() {
   }
 
   const colors = getCategoryColor(product.category);
-  const daysUntilExpiry = product.expiryDate ? (() => { const d = parseTallyDate(product.expiryDate); return d ? Math.ceil((d.getTime() - Date.now()) / (1000 * 3600 * 24)) : null; })() : null;
-  const isExpired = daysUntilExpiry !== null && daysUntilExpiry < 0;
-  const isUrgent = daysUntilExpiry !== null && daysUntilExpiry >= 0 && daysUntilExpiry <= 30;
 
   return (
     <View style={styles.outerContainer}>
@@ -316,7 +283,7 @@ export default function ProductDetailScreen() {
             </TouchableOpacity>
           </View>
         ) : (
-          <View style={{ flexDirection: "row", gap: 8 }}>
+<View style={{ flexDirection: "row", gap: 8 }}>
             <TouchableOpacity style={styles.headerAction} onPress={shareProduct}>
               <Share2 color="#16a34a" size={18} />
             </TouchableOpacity>
@@ -359,39 +326,6 @@ export default function ProductDetailScreen() {
                 ))}
               </View>
             </View>
-
-            <View style={styles.card}>
-              <Text style={styles.label}>Expiry Date</Text>
-              <TouchableOpacity style={styles.inputRow} onPress={openExpiryDatePicker}>
-                <Calendar color={editExpiryDate ? "#16a34a" : "#9ca3af"} size={16} />
-                <Text style={[styles.input, { flex: 1 }, editExpiryDate ? { color: "#1a1a2e" } : { color: "#9ca3af" }]}>
-                  {editExpiryDate
-                    ? new Date(editExpiryDate).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })
-                    : "Select expiry date"}
-                </Text>
-                {editExpiryDate ? (
-                  <TouchableOpacity onPress={() => setEditExpiryDate("")} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                    <X color="#9ca3af" size={14} />
-                  </TouchableOpacity>
-                ) : null}
-              </TouchableOpacity>
-              {showExpiryDatePicker && (
-                <DateTimePicker
-                  value={editExpiryDate ? new Date(editExpiryDate) : new Date()}
-                  mode="date"
-                  display={Platform.OS === "ios" ? "inline" : "default"}
-                  onChange={onExpiryDateChange}
-                />
-              )}
-              {editExpiryDate ? (
-                <View style={[styles.expiryBadge, isExpired && styles.expiryBadgeExpired, isUrgent && styles.expiryBadgeUrgent]}>
-                  <Clock color={isExpired ? "#dc2626" : isUrgent ? "#f59e0b" : "#16a34a"} size={12} />
-                  <Text style={[styles.expiryBadgeText, isExpired && styles.expiryBadgeTextExpired, isUrgent && styles.expiryBadgeTextUrgent]}>
-                    {isExpired ? "Expired" : daysUntilExpiry + " days left"}
-                  </Text>
-                </View>
-              ) : null}
-            </View>
           </>
         ) : (
           <>
@@ -414,19 +348,11 @@ export default function ProductDetailScreen() {
                 <Text style={styles.detailLabel}>Unit</Text>
                 <Text style={styles.detailValue}>{product.unit || "—"}</Text>
               </View>
-              {product.expiryDate && (
+              {product.tallyCode && (
                 <View style={styles.detailRow}>
-                  <Calendar color="#6b7280" size={16} />
-                  <Text style={styles.detailLabel}>Expiry Date</Text>
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                    <Text style={styles.detailValue}>{formatDate(product.expiryDate)}</Text>
-                    <View style={[styles.expiryBadge, isExpired && styles.expiryBadgeExpired, isUrgent && styles.expiryBadgeUrgent]}>
-                      <Clock color={isExpired ? "#dc2626" : isUrgent ? "#f59e0b" : "#16a34a"} size={9} />
-                      <Text style={[styles.expiryBadgeText, isExpired && styles.expiryBadgeTextExpired, isUrgent && styles.expiryBadgeTextUrgent]}>
-                        {isExpired ? "Expired" : daysUntilExpiry + "d"}
-                      </Text>
-                    </View>
-                  </View>
+                  <Tag color="#6b7280" size={16} />
+                  <Text style={styles.detailLabel}>GUID</Text>
+                  <Text style={[styles.detailValue, styles.mono]} numberOfLines={1}>{product.tallyCode}</Text>
                 </View>
               )}
             </View>

@@ -6,8 +6,9 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
 import { Search, MapPin, PlusCircle, Check, Package, Sprout, Calendar, ChevronRight, ChevronLeft, Camera, X, Trash2, Clock, ArrowLeft } from "@/components/Icons";
-import { CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, ITEMS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, VISIT_PHOTOS_COLLECTION_ID, STORAGE_BUCKET_ID } from "@/lib/appwrite";
+import { CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, INVENTORY_ITEMS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, VISIT_PHOTOS_COLLECTION_ID, STORAGE_BUCKET_ID } from "@/lib/appwrite";
 import { getCollection, createDocument, enqueuePhotoUpload } from "@/lib/sync-manager";
+import { normalizeCategory } from "@/lib/inventory-utils";
 
 // ── Prescription Data Types ───────────────────────────────────────────────────
 
@@ -144,7 +145,18 @@ export default function NewVisitScreen() {
         const cs = getCollection(CUSTOMERS_COLLECTION_ID).map((c: any) => ({ ...c, phone: c.phone || c.mobile || "" }));
         setCustomers(cs as Customer[]);
       } catch {}
-      try { setItems(getCollection(ITEMS_COLLECTION_ID) as Item[]); } catch {}
+      try {
+        // Products now live in inventory_items (Tally-managed). Map to the
+        // picker's Item shape { $id, name, category, unit }.
+        setItems(getCollection(INVENTORY_ITEMS_COLLECTION_ID)
+          .filter((i: any) => i.item_name)
+          .map((i: any) => ({
+            $id: i.$id,
+            name: i.item_name,
+            category: normalizeCategory(i.stock_group),
+            unit: i.base_unit || undefined,
+          })) as Item[]);
+      } catch {}
     }, [])
   );
 

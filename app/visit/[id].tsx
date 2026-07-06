@@ -6,9 +6,10 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
 import { ArrowLeft, Calendar, Sprout, Package, Bell, Phone, MapPin, FileText, Camera, ExternalLink, Share2, Clock, ChevronRight, Pencil, Check, X, Trash2, PlusCircle, Search } from "@/components/Icons";
-import { CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, VISIT_PHOTOS_COLLECTION_ID, ITEMS_COLLECTION_ID, STORAGE_BUCKET_ID } from "@/lib/appwrite";
+import { CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, VISIT_PHOTOS_COLLECTION_ID, INVENTORY_ITEMS_COLLECTION_ID, STORAGE_BUCKET_ID } from "@/lib/appwrite";
 import { getCollection, getDocument, updateDocument, createDocument, deleteDocument, enqueuePhotoUpload } from "@/lib/sync-manager";
 import { useNetwork } from "@/lib/network-provider";
+import { normalizeCategory } from "@/lib/inventory-utils";
 
 interface Customer {
   name: string;
@@ -142,10 +143,16 @@ export default function VisitDetailScreen() {
       }
       setCustomer(customerData);
 
-      // Load items catalog
+      // Load items catalog (products live in inventory_items now)
       try {
-        const itemsRes = getCollection(ITEMS_COLLECTION_ID);
-        setAllItems(itemsRes as Item[]);
+        setAllItems(getCollection(INVENTORY_ITEMS_COLLECTION_ID)
+          .filter((i: any) => i.item_name)
+          .map((i: any) => ({
+            $id: i.$id,
+            name: i.item_name,
+            category: normalizeCategory(i.stock_group),
+            unit: i.base_unit || undefined,
+          })) as Item[]);
       } catch {}
 
       try {
@@ -159,11 +166,12 @@ export default function VisitDetailScreen() {
             return ta - tb;
           });
 
-        // Build item name map
+        // Build item name map from inventory_items ($id → { name, category, unit })
         const itemMap: Record<string, { name: string; category?: string; unit?: string }> = {};
         try {
-          const itemsRes = getCollection(ITEMS_COLLECTION_ID);
-          itemsRes.forEach((item: any) => { itemMap[item.$id] = { name: item.name, category: item.category, unit: item.unit }; });
+          getCollection(INVENTORY_ITEMS_COLLECTION_ID).forEach((i: any) => {
+            itemMap[i.$id] = { name: i.item_name, category: normalizeCategory(i.stock_group), unit: i.base_unit || undefined };
+          });
         } catch {}
 
         const recs: Recommendation[] = recsRes.map((r: any) => {
