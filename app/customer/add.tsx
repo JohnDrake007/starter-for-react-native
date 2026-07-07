@@ -6,6 +6,7 @@ import * as Location from "expo-location";
 import { ArrowLeft, UserPlus, Phone, MapPin, Sprout, Check } from "@/components/Icons";
 import { CUSTOMERS_COLLECTION_ID } from "@/lib/appwrite";
 import { createDocument } from "@/lib/sync-manager";
+import { generateAppGuid } from "@/lib/inventory-utils";
 
 const cropOptions = ["Cardamom", "Pepper", "Coffee", "Tea", "Rubber", "Coconut", "Rice", "Other"];
 
@@ -60,6 +61,11 @@ export default function AddCustomerScreen() {
     setSubmitting(true);
     try {
       await createDocument(CUSTOMERS_COLLECTION_ID, {
+        // The customers collection has a UNIQUE index on `guid` (default "").
+        // Without a per-document guid, the 2nd app-created customer collides on
+        // the empty string → 409. Use an app-prefixed guid (matches products)
+        // so it is unique and never overwritten by a Tally sync.
+        guid: generateAppGuid(),
         name: name.trim(),
         phone: phone.trim(),
         address: address.trim() || undefined,

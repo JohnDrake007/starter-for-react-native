@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { databases, storage, Query, DATABASE_ID, CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, VISIT_PHOTOS_COLLECTION_ID, INVENTORY_ITEMS_COLLECTION_ID, INVENTORY_BATCHES_COLLECTION_ID } from "./appwrite";
+import { client, databases, storage, Query, DATABASE_ID, CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, VISIT_PHOTOS_COLLECTION_ID, INVENTORY_ITEMS_COLLECTION_ID, INVENTORY_BATCHES_COLLECTION_ID } from "./appwrite";
 // Lazy import to avoid circular deps — imported inline in syncNow
 let _scheduleVisitReminders: (() => Promise<void>) | null = null;
 async function refreshNotifications() {
@@ -68,7 +68,11 @@ let pendingQueue: PendingMutation[] = [];
 let lastSyncTime: string | null = null;
 let currentStatus: SyncStatus = "idle";
 const listeners: Set<SyncListener> = new Set();
+// Fired whenever the local cache is mutated (pull, push, or a realtime event)
+// so that any visible screen can re-read getCollection() and update live.
+const dataListeners: Set<() => void> = new Set();
 let initialized = false;
+let realtimeUnsub: (() => void) | null = null;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -111,6 +115,15 @@ function broadcast(status: SyncStatus, info?: string) {
   });
 }
 
+/** Notify subscribers that the local cache changed so visible screens refresh. */
+function notifyDataChange() {
+  dataListeners.forEach((fn) => {
+    try {
+      fn();
+    } catch {}
+  });
+}
+
 async function persistCollection(collectionId: string) {
   const key = STORAGE_KEYS[collectionId];
   if (!key) return;
@@ -127,11 +140,24 @@ async function persistQueue() {
  * unavailable errors should cause a write to fall back to the pending queue;
  * client errors (4xx) indicate bad data and must surface to the caller so the
  * user can correct the input rather than retrying a doomed mutation forever.
+ *
+ * NOTE: react-native-appwrite wraps a failed `fetch` (device offline, DNS
+ * failure, connection reset, TLS error, timeout) into an AppwriteException
+ * whose `code` defaults to 0 — NOT a 5xx. Treating code 0 as a client error
+ * caused genuine network failures to be re-thrown to the user instead of
+ * being queued for later sync (the "Network request failed" dialog with no
+ * offline fallback). Anything that is not an explicit 4xx client error is
+ * therefore treated as a transient network/server failure and queued.
  */
 function isNetworkOrUnavailableError(e: any): boolean {
-  if (e && typeof e.code === "number") {
-    return e.code >= 500;
+  const code = e?.code;
+  if (typeof code === "number" && code >= 400 && code < 500) {
+    // Explicit client error (bad data, unauthorized, conflict, not found) —
+    // surface to the caller; queuing it would retry a doomed mutation forever.
+    return false;
   }
+  // code === 0 / undefined (fetch failure) or >= 500 (server unavailable) —
+  // transient; fall back to the offline queue and retry on reconnect.
   return true;
 }
 
@@ -474,6 +500,78 @@ export function addSyncListener(fn: SyncListener): () => void {
   return () => listeners.delete(fn);
 }
 
+/**
+ * Register a listener that fires whenever the local cache changes — from a
+ * pull, a pushed mutation, or a realtime event pushed by another device.
+ * Screens use this to re-read getCollection() and stay live without a manual
+ * refresh. Returns an unsubscribe fn.
+ */
+export function addDataChangeListener(fn: () => void): () => void {
+  dataListeners.add(fn);
+  return () => dataListeners.delete(fn);
+}
+
+// ── Realtime ──────────────────────────────────────────────────────────────────
+
+/** All collections we mirror locally and want live updates for. */
+const REALTIME_COLLECTIONS = [...SYNCABLE_COLLECTIONS, ...INVENTORY_COLLECTIONS];
+
+/**
+ * Apply a single realtime event to the local cache. Online-first: the server
+ * is the source of truth, so a create/update upserts the canonical document and
+ * a delete removes it — keeping every device's offline cache continuously
+ * updated (and stale entries removed) without waiting for the next full sync.
+ */
+async function handleRealtimeEvent(res: any): Promise<void> {
+  const doc = res?.payload;
+  const events: string[] = res?.events || [];
+  if (!doc || !doc.$id) return;
+
+  // Resolve which tracked collection this document belongs to.
+  const collectionId: string | undefined = doc.$collectionId;
+  if (!collectionId || !STORAGE_KEYS[collectionId]) return;
+
+  const isDelete = events.some((e) => e.endsWith(".delete"));
+  if (isDelete) {
+    removeFromCache(collectionId, doc.$id);
+  } else {
+    // create or update
+    upsertIntoCache(collectionId, doc);
+  }
+  await persistCollection(collectionId);
+  notifyDataChange();
+}
+
+/**
+ * Subscribe to Appwrite realtime for every mirrored collection. Idempotent —
+ * calling it again while already subscribed is a no-op. The Appwrite client
+ * manages websocket reconnection internally; we (re)subscribe when the app
+ * comes online and tear down when it goes offline.
+ */
+export function startRealtime(): void {
+  if (realtimeUnsub) return;
+  const channels = REALTIME_COLLECTIONS.map(
+    (c) => `databases.${DATABASE_ID}.collections.${c}.documents`
+  );
+  try {
+    realtimeUnsub = client.subscribe(channels, (res: any) => {
+      handleRealtimeEvent(res).catch(() => {});
+    });
+  } catch (e) {
+    console.warn("[SyncManager] realtime subscribe failed:", e);
+    realtimeUnsub = null;
+  }
+}
+
+/** Tear down the realtime subscription (called when the app goes offline). */
+export function stopRealtime(): void {
+  if (!realtimeUnsub) return;
+  try {
+    realtimeUnsub();
+  } catch {}
+  realtimeUnsub = null;
+}
+
 // ── Sync Execution ────────────────────────────────────────────────────────────
 
 /**
@@ -497,6 +595,9 @@ export async function syncNow(): Promise<void> {
 
     // ── 4. Re-schedule device notifications to reflect fresh data ──
     refreshNotifications();
+
+    // ── 5. Refresh any visible screens with the freshly synced cache ──
+    notifyDataChange();
 
     broadcast("idle", "Sync complete");
   } catch (e: any) {
@@ -700,6 +801,7 @@ export async function syncInventoryCollections(): Promise<void> {
       // Non-fatal — keep cached data
     }
   }
+  notifyDataChange();
 }
 
 /**

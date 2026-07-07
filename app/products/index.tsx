@@ -5,7 +5,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ArrowLeft, Search, Package, Tag, Beaker, Share2, Plus, X, Calendar, Clock } from "@/components/Icons";
 import { INVENTORY_ITEMS_COLLECTION_ID, INVENTORY_BATCHES_COLLECTION_ID } from "@/lib/appwrite";
 import { getCollection, syncInventoryCollections } from "@/lib/sync-manager";
-import { useNetwork } from "@/lib/network-provider";
+import { useNetwork, useDataChange } from "@/lib/network-provider";
 import { normalizeCategory, parseQty } from "@/lib/inventory-utils";
 
 interface Item {
@@ -154,6 +154,9 @@ export default function ProductCatalogScreen() {
     // Sync inventory in background so batch expiry data is fresh for FEFO filter
     syncInventoryCollections().then(fetchItems).catch(() => {});
   }, [fetchItems]));
+
+  // Live-refresh when data changes (realtime events / sync).
+  useDataChange(fetchItems);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);

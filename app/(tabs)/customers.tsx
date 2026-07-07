@@ -5,7 +5,7 @@ import { useRouter, useFocusEffect } from "expo-router";
 import { Search, Phone, MapPin, Sprout, UserPlus } from "@/components/Icons";
 import { CUSTOMERS_COLLECTION_ID } from "@/lib/appwrite";
 import { getCollection } from "@/lib/sync-manager";
-import { useNetwork } from "@/lib/network-provider";
+import { useNetwork, useDataChange } from "@/lib/network-provider";
 
 interface Customer {
   $id: string;
@@ -55,6 +55,9 @@ export default function CustomersScreen() {
       fetchCustomers();
     }, [fetchCustomers])
   );
+
+  // Live-refresh when data changes (realtime events / sync).
+  useDataChange(fetchCustomers);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);

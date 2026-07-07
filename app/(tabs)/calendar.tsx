@@ -5,7 +5,7 @@ import { useRouter, useFocusEffect } from "expo-router";
 import { Bell, Calendar, Sprout, ChevronLeft, ChevronRight, ChevronDown, X } from "@/components/Icons";
 import { VISITS_COLLECTION_ID, CUSTOMERS_COLLECTION_ID } from "@/lib/appwrite";
 import { getCollection } from "@/lib/sync-manager";
-import { useNetwork } from "@/lib/network-provider";
+import { useNetwork, useDataChange } from "@/lib/network-provider";
 
 interface CustomerMap {
   [key: string]: { name: string; cropType?: string };
@@ -87,6 +87,9 @@ export default function CalendarScreen() {
       loadData();
     }, [loadData])
   );
+
+  // Live-refresh when data changes (realtime events / sync).
+  useDataChange(loadData);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);

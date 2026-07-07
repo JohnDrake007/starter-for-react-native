@@ -5,7 +5,7 @@ import { useRouter, useFocusEffect } from "expo-router";
 import { Bell, Users, ClipboardList, Sprout, PlusCircle, UserPlus, MapPin, ArrowRight, ClipboardCheck } from "@/components/Icons";
 import { CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, INVENTORY_ITEMS_COLLECTION_ID } from "@/lib/appwrite";
 import { getCollection } from "@/lib/sync-manager";
-import { useNetwork } from "@/lib/network-provider";
+import { useNetwork, useDataChange } from "@/lib/network-provider";
 import SyncStatusIcon from "@/components/SyncStatusIcon";
 
 interface VisitWithCustomer {
@@ -125,6 +125,9 @@ export default function HomeScreen() {
       loadData();
     }, [loadData])
   );
+
+  // Live-refresh when data changes (realtime events / sync).
+  useDataChange(loadData);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);

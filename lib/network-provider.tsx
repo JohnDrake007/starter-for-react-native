@@ -7,8 +7,11 @@ import {
   getLastSyncTime,
   getPendingCount,
   addSyncListener,
+  addDataChangeListener,
   setOffline,
   setOnline,
+  startRealtime,
+  stopRealtime,
   type SyncStatus,
 } from "./sync-manager";
 
@@ -33,6 +36,15 @@ const NetworkContext = createContext<NetworkContextValue>({
 
 export function useNetwork(): NetworkContextValue {
   return useContext(NetworkContext);
+}
+
+/**
+ * Subscribe a screen to local-cache changes (realtime events, pulls, or pushed
+ * mutations) so it re-reads its data live without needing a manual refresh or
+ * re-focus. Pass a stable callback (e.g. wrapped in useCallback).
+ */
+export function useDataChange(onChange: () => void): void {
+  useEffect(() => addDataChangeListener(onChange), [onChange]);
 }
 
 // ── Provider ──────────────────────────────────────────────────────────────────
@@ -71,6 +83,8 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
             setPendingCount(getPendingCount());
           }
         } catch {}
+        // Subscribe to realtime so changes from other devices land live.
+        startRealtime();
       } else {
         setOffline();
       }
@@ -79,6 +93,7 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
     init();
     return () => {
       mounted = false;
+      stopRealtime();
     };
   }, []);
 
@@ -116,8 +131,11 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
             } catch {}
           }
           wasOfflineRef.current = false;
+          // (Re)subscribe to realtime now that we're back online.
+          startRealtime();
         } else {
           wasOfflineRef.current = true;
+          stopRealtime();
           setOffline();
         }
       }, 1500); // 1.5s debounce

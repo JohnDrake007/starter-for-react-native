@@ -5,7 +5,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Search, Calendar, Package, Sprout, MapPin, ArrowLeft, Filter, X, ChevronLeft, ChevronRight } from "@/components/Icons";
 import { CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, INVENTORY_ITEMS_COLLECTION_ID } from "@/lib/appwrite";
 import { getCollection } from "@/lib/sync-manager";
-import { useNetwork } from "@/lib/network-provider";
+import { useNetwork, useDataChange } from "@/lib/network-provider";
 
 interface VisitItem {
   $id: string;
@@ -100,6 +100,9 @@ export default function AllVisitsScreen() {
       loadData();
     }, [loadData])
   );
+
+  // Live-refresh when data changes (realtime events / sync).
+  useDataChange(loadData);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
