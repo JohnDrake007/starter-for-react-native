@@ -63,6 +63,9 @@ const MONTH_ABBR: Record<string, number> = {
 function parseTallyDate(dateStr: string): Date | null {
   if (!dateStr || dateStr.trim() === "") return null;
   const s = dateStr.trim();
+  // Tally sometimes sets EXPIRYPERIOD to a duration like "1 Days" when no real
+  // expiry is configured — not a calendar date, so treat as "no expiry".
+  if (/^\d+\s*Days?$/i.test(s)) return null;
   // YYYYMMDD (e.g. "20250630")
   if (/^\d{8}$/.test(s)) {
     const y = parseInt(s.slice(0, 4));
