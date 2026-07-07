@@ -27,3 +27,5 @@ To create a production build of your app, follow the documentation by [Expo Appl
 ## 💡 Additional notes
 - This starter project is designed to streamline your React Native development with Appwrite.
 - Refer to the [Appwrite documentation](https://appwrite.io/docs) for detailed integration guidance.
+
+npx expo start --tunnel
