@@ -368,6 +368,7 @@ export default function ProductCatalogScreen() {
         </View>
       ) : (
         <FlatList
+          style={styles.list}
           data={filteredItems}
           keyExtractor={(item) => item.$id}
           contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 80 }}
@@ -392,6 +393,7 @@ export default function ProductCatalogScreen() {
 
 const styles = StyleSheet.create({
   outerContainer: { flex: 1, backgroundColor: "#fafafa" },
+  list: { flex: 1 },
   header: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingBottom: 12, backgroundColor: "#fff", borderBottomWidth: 1, borderBottomColor: "#e5e7eb" },
   headerBack: { width: 44, height: 44, justifyContent: "center", alignItems: "center", marginLeft: -8 },
   headerCenter: { flex: 1, alignItems: "center" },

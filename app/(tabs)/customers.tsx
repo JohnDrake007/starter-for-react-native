@@ -160,6 +160,7 @@ export default function CustomersScreen() {
         </View>
       ) : (
         <FlatList
+          style={styles.list}
           data={filteredCustomers}
           keyExtractor={(item) => item.$id}
           renderItem={renderCustomer}
@@ -187,6 +188,7 @@ const styles = StyleSheet.create({
   filterText: { fontSize: 12, fontWeight: "500", color: "#6b7280" },
   filterTextActive: { color: "#fff" },
   countText: { fontSize: 12, color: "#9ca3af", marginBottom: 8, fontWeight: "500" },
+  list: { flex: 1 },
   customerCard: { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: "#fff", borderRadius: 14, padding: 12, borderWidth: 1, borderColor: "#e5e7eb" },
   avatar: { width: 44, height: 44, borderRadius: 22, justifyContent: "center", alignItems: "center" },
   avatarText: { color: "#fff", fontSize: 14, fontWeight: "700" },

@@ -1,5 +1,5 @@
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from "react-native";
-import { Package, Database, Leaf, Info, RefreshCw, Wifi, WifiOff, CloudOff } from "@/components/Icons";
+import { Package, Leaf, Info, RefreshCw, Wifi, WifiOff, CloudOff } from "@/components/Icons";
 import { useNetwork } from "@/lib/network-provider";
 import { useState } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -67,18 +67,6 @@ export default function MoreScreen() {
           <Text style={styles.menuSub}>View all products & items</Text>
         </View>
       </TouchableOpacity>
-
-      <View style={styles.menuCard}>
-        <View style={[styles.menuIcon, { backgroundColor: "#dcfce7" }]}>
-          <Database color="#16a34a" size={20} />
-        </View>
-        <View style={styles.menuInfo}>
-          <Text style={styles.menuTitle}>Demo Data</Text>
-          <Text style={styles.menuSub}>Load sample farmers & visits</Text>
-        </View>
-      </View>
-
-
 
       <View style={styles.aboutCard}>
         <View style={styles.aboutHeader}>
