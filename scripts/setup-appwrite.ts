@@ -2,7 +2,7 @@ import { Client, Databases, ID, Permission, Role } from "react-native-appwrite";
 
 const PROJECT_ID = process.env.APPWRITE_PROJECT_ID || "";
 const ENDPOINT = process.env.APPWRITE_ENDPOINT || "https://sgp.cloud.appwrite.io/v1";
-const DATABASE_ID = process.env.APPWRITE_DATABASE_ID || "6a1c0a8a0029a3ca0c82";
+const DATABASE_ID = process.env.APPWRITE_DATABASE_ID || "field_agent_db";
 
 const client = new Client()
   .setProject(PROJECT_ID)
