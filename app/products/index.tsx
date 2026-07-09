@@ -151,8 +151,6 @@ export default function ProductCatalogScreen() {
 
   useFocusEffect(useCallback(() => {
     fetchItems();
-    // Sync inventory in background so batch expiry data is fresh for FEFO filter
-    syncInventoryCollections().then(fetchItems).catch(() => {});
   }, [fetchItems]));
 
   // Live-refresh when data changes (realtime events / sync).

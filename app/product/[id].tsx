@@ -182,8 +182,6 @@ export default function ProductDetailScreen() {
 
   useFocusEffect(useCallback(() => {
     loadData();
-    // Trigger inventory sync in background on focus so batch data is fresh
-    syncInventoryCollections().then(loadData).catch(() => {});
   }, [loadData]));
 
   const onRefresh = useCallback(async () => {
