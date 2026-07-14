@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from "react";
+import { AppState, AppStateStatus } from "react-native";
 import NetInfo, { NetInfoState } from "@react-native-community/netinfo";
 import {
   initSync,
@@ -56,6 +57,47 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
   const [initialized, setInitialized] = useState(false);
   const wasOfflineRef = useRef(false);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryCountRef = useRef(0);
+
+  // A cold launch, a reconnect, or a foreground resume is each only ONE sync
+  // attempt. If that attempt fails for a transient reason (e.g. the OS reports
+  // "connected" a moment before the network path is actually usable), nothing
+  // previously re-armed sync — mutations sat queued until a manual
+  // pull-to-refresh called syncNow() directly. Retry with backoff instead so a
+  // one-off transient failure doesn't strand pending changes indefinitely.
+  const RETRY_DELAYS_MS = [3000, 8000, 20000, 45000];
+
+  const clearRetry = useCallback(() => {
+    if (retryTimerRef.current) {
+      clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+    retryCountRef.current = 0;
+  }, []);
+
+  const attemptSync = useCallback(async () => {
+    if (retryTimerRef.current) {
+      clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+
+    try {
+      await syncNow();
+    } catch {}
+    setLastSync(getLastSyncTime());
+    setPendingCount(getPendingCount());
+
+    if (getPendingCount() > 0 && retryCountRef.current < RETRY_DELAYS_MS.length) {
+      const delay = RETRY_DELAYS_MS[retryCountRef.current];
+      retryCountRef.current += 1;
+      retryTimerRef.current = setTimeout(() => {
+        attemptSync();
+      }, delay);
+    } else {
+      retryCountRef.current = 0;
+    }
+  }, []);
 
   // ── Initialize sync on mount ──
   useEffect(() => {
@@ -75,14 +117,9 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
       setIsOnline(online);
 
       if (online) {
-        // Do an initial sync to pull latest data
-        try {
-          await syncNow();
-          if (mounted) {
-            setLastSync(getLastSyncTime());
-            setPendingCount(getPendingCount());
-          }
-        } catch {}
+        // Do an initial sync to pull latest data (retried on transient failure).
+        await attemptSync();
+        if (!mounted) return;
         // Subscribe to realtime so changes from other devices land live.
         startRealtime();
       } else {
@@ -94,8 +131,9 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
     return () => {
       mounted = false;
       stopRealtime();
+      clearRetry();
     };
-  }, []);
+  }, [attemptSync, clearRetry]);
 
   // ── Listen for sync status changes ──
   useEffect(() => {
@@ -124,11 +162,7 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
           setOnline();
           // Auto-sync when transitioning from offline → online
           if (wasOfflineRef.current) {
-            try {
-              await syncNow();
-              setLastSync(getLastSyncTime());
-              setPendingCount(getPendingCount());
-            } catch {}
+            await attemptSync();
           }
           wasOfflineRef.current = false;
           // (Re)subscribe to realtime now that we're back online.
@@ -137,6 +171,7 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
           wasOfflineRef.current = true;
           stopRealtime();
           setOffline();
+          clearRetry();
         }
       }, 1500); // 1.5s debounce
     });
@@ -147,7 +182,36 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
         clearTimeout(debounceTimerRef.current);
       }
     };
-  }, []);
+  }, [attemptSync, clearRetry]);
+
+  // ── Re-check connectivity and sync whenever the app returns to the foreground ──
+  // NetInfo events can go unobserved while the JS thread is suspended (app
+  // backgrounded, not killed) — e.g. the device reconnects while backgrounded.
+  // Without this, offline edits made before backgrounding never auto-sync until
+  // the user manually pulls-to-refresh a screen.
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", async (nextState: AppStateStatus) => {
+      if (nextState !== "active") return;
+
+      const state = await NetInfo.fetch();
+      const online = !!(state.isConnected && state.isInternetReachable !== false);
+      setIsOnline(online);
+
+      if (online) {
+        setOnline();
+        wasOfflineRef.current = false;
+        startRealtime();
+        await attemptSync();
+      } else {
+        wasOfflineRef.current = true;
+        stopRealtime();
+        setOffline();
+        clearRetry();
+      }
+    });
+
+    return () => subscription.remove();
+  }, [attemptSync, clearRetry]);
 
   // ── Manual sync handler ──
   const handleSyncNow = useCallback(async () => {
