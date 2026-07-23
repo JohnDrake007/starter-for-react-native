@@ -238,6 +238,12 @@ export async function initSync(): Promise<void> {
         } catch {}
       }
     }
+    // Durable product-name map (survives inventory re-import with new $ids)
+    try {
+      const { initProductNameCache, seedProductNamesFromInventory } = await import("./product-name-cache");
+      await initProductNameCache();
+      seedProductNamesFromInventory(cache[INVENTORY_ITEMS_COLLECTION_ID] || []);
+    } catch {}
     // Load pending queue
     const rawQueue = await AsyncStorage.getItem(PENDING_QUEUE_KEY);
     pendingQueue = rawQueue ? JSON.parse(rawQueue) : [];
@@ -777,6 +783,13 @@ async function pullAllCollections(): Promise<void> {
  * Called from product screens — does NOT block the main syncNow cycle.
  */
 export async function syncInventoryCollections(): Promise<void> {
+  // Snapshot names from whatever is currently cached BEFORE replace, so a
+  // Tally re-import (new Appwrite $ids) doesn't break old recommendation links.
+  try {
+    const { seedProductNamesFromInventory } = await import("./product-name-cache");
+    seedProductNamesFromInventory(cache[INVENTORY_ITEMS_COLLECTION_ID] || []);
+  } catch {}
+
   for (const collectionId of INVENTORY_COLLECTIONS) {
     try {
       const allDocs: any[] = [];
@@ -792,6 +805,13 @@ export async function syncInventoryCollections(): Promise<void> {
         allDocs.push(...(res.documents as any[]));
         if (res.documents.length < limit) break;
         offset += limit;
+      }
+
+      if (collectionId === INVENTORY_ITEMS_COLLECTION_ID) {
+        try {
+          const { seedProductNamesFromInventory } = await import("./product-name-cache");
+          seedProductNamesFromInventory(allDocs);
+        } catch {}
       }
 
       cache[collectionId] = allDocs;

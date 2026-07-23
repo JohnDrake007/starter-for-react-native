@@ -6,7 +6,7 @@ import { ArrowLeft, Package, Tag, Beaker, Clock, Pencil, Check, X, Share2 } from
 import { INVENTORY_ITEMS_COLLECTION_ID, INVENTORY_BATCHES_COLLECTION_ID } from "@/lib/appwrite";
 import { getDocument, updateDocument, getCollection, syncInventoryCollections } from "@/lib/sync-manager";
 import { useNetwork } from "@/lib/network-provider";
-import { normalizeCategory } from "@/lib/inventory-utils";
+import { normalizeCategory, parseQty } from "@/lib/inventory-utils";
 
 const categories = ["Fertilizer", "Insecticide", "Fungicide", "Herbicide", "PGR", "Organic", "Micronutrient", "Other"];
 const units = ["kg", "g", "L", "ml", "packet", "bottle", "bag", "tablet", "piece"];
@@ -231,11 +231,15 @@ export default function ProductDetailScreen() {
     lines.push("📛 *Name:* " + product.name);
     if (product.category) lines.push("🏷️ *Category:* " + product.category);
     if (product.unit) lines.push("🧪 *Unit:* " + product.unit);
+    const shareTotalQty = batches.reduce((sum, b) => sum + parseQty(b.qty), 0);
+    if (shareTotalQty > 0 || batches.length > 0) {
+      lines.push("📊 *Total Qty:* " + (shareTotalQty % 1 === 0 ? shareTotalQty : shareTotalQty.toFixed(2)) + (product.unit ? " " + product.unit : ""));
+    }
     if (batches.length > 0) {
       lines.push("\n🗃️ *Batches (" + batches.length + "):*");
       batches.slice(0, 5).forEach((b) => {
         let bLine = "  • " + b.batch_no;
-        if (b.qty) bLine += " — Qty: " + b.qty;
+        if (b.qty !== undefined && b.qty !== null) bLine += " — Qty: " + b.qty;
         if (b.expiry_date) bLine += " — Exp: " + formatDisplayDate(b.expiry_date);
         lines.push(bLine);
       });
@@ -264,6 +268,9 @@ export default function ProductDetailScreen() {
   }
 
   const colors = getCategoryColor(product.category);
+  // Product-level stock = sum of every batch's current (closing) qty.
+  const totalBatchQty = batches.reduce((sum, b) => sum + parseQty(b.qty), 0);
+  const unitLabel = inventoryItem?.base_unit || product.unit || "";
 
   return (
     <View style={styles.outerContainer}>
@@ -356,6 +363,24 @@ export default function ProductDetailScreen() {
                   <Text style={[styles.detailValue, styles.mono]} numberOfLines={1}>{product.tallyCode}</Text>
                 </View>
               )}
+            </View>
+
+            <View style={styles.card}>
+              <Text style={styles.sectionTitle}>Stock</Text>
+              <View style={styles.stockGrid}>
+                <View style={[styles.stockCard, styles.stockCardHighlight]}>
+                  <Text style={styles.stockCardLabel}>Total Qty</Text>
+                  <Text style={[styles.stockCardValue, styles.stockCardValueGreen]}>
+                    {totalBatchQty % 1 === 0 ? totalBatchQty : totalBatchQty.toFixed(2)}
+                    {unitLabel ? ` ${unitLabel}` : ""}
+                  </Text>
+                  <Text style={styles.stockCardSub}>
+                    {batches.length > 0
+                      ? `Sum of ${batches.length} batch${batches.length === 1 ? "" : "es"}`
+                      : "No batches"}
+                  </Text>
+                </View>
+              </View>
             </View>
 
             {batches.length > 0 && (

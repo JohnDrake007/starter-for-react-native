@@ -9,6 +9,7 @@ import { Search, MapPin, PlusCircle, Check, Package, Sprout, Calendar, ChevronRi
 import { CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, INVENTORY_ITEMS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, VISIT_PHOTOS_COLLECTION_ID, STORAGE_BUCKET_ID } from "@/lib/appwrite";
 import { getCollection, createDocument, enqueuePhotoUpload } from "@/lib/sync-manager";
 import { normalizeCategory } from "@/lib/inventory-utils";
+import { rememberProduct, seedProductNamesFromInventory } from "@/lib/product-name-cache";
 
 // ── Prescription Data Types ───────────────────────────────────────────────────
 
@@ -74,9 +75,12 @@ function encodePrescriptionToRecs(sections: PrescriptionSection[]): {
       notes: undefined,
     });
     for (const p of sec.products) {
+      // Always persist the display name in customItem so visit views can show
+      // the product name even when inventory_items isn't cached. Catalog picks
+      // still keep itemId for linking; isCustom = customItem && !itemId.
       out.push({
         itemId: p.isCustom ? undefined : p.itemId,
-        customItem: p.isCustom ? p.customItem : undefined,
+        customItem: (p.isCustom ? p.customItem : p.name) || p.name || undefined,
         dosage: undefined,
         quantity: p.quantity || undefined,
         notes: p.subLabel || undefined,
@@ -148,7 +152,9 @@ export default function NewVisitScreen() {
       try {
         // Products now live in inventory_items (Tally-managed). Map to the
         // picker's Item shape { $id, name, category, unit }.
-        setItems(getCollection(INVENTORY_ITEMS_COLLECTION_ID)
+        const inv = getCollection(INVENTORY_ITEMS_COLLECTION_ID);
+        seedProductNamesFromInventory(inv);
+        setItems(inv
           .filter((i: any) => i.item_name)
           .map((i: any) => ({
             $id: i.$id,
@@ -234,9 +240,10 @@ export default function NewVisitScreen() {
       : s));
 
   const pickSuggestion = (sId: string, pId: string, item: Item) => {
+    rememberProduct(item.$id, item.name);
     setSections((prev) => prev.map((s) => s.id === sId
       ? { ...s, products: s.products.map((p) => p.id === pId
-          ? { ...p, itemId: item.$id, customItem: undefined, name: item.name, unit: item.unit, category: item.category, isCustom: false }
+          ? { ...p, itemId: item.$id, customItem: item.name, name: item.name, unit: item.unit, category: item.category, isCustom: false }
           : p) }
       : s));
     setSearchState(null);

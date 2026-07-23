@@ -6,6 +6,8 @@ import { Bell, Users, ClipboardList, Sprout, PlusCircle, UserPlus, MapPin, Arrow
 import { CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, INVENTORY_ITEMS_COLLECTION_ID } from "@/lib/appwrite";
 import { getCollection } from "@/lib/sync-manager";
 import { useNetwork, useDataChange } from "@/lib/network-provider";
+import { buildItemLookup, resolveRecProductName } from "@/lib/inventory-utils";
+import { lookupCachedProductName } from "@/lib/product-name-cache";
 import SyncStatusIcon from "@/components/SyncStatusIcon";
 
 interface VisitWithCustomer {
@@ -84,14 +86,13 @@ export default function HomeScreen() {
         if (allVisitIds.length > 0) {
           const allRecs = getCollection(RECOMMENDATIONS_COLLECTION_ID);
           const allItems = getCollection(INVENTORY_ITEMS_COLLECTION_ID);
-          const itemNameMap: Record<string, string> = {};
-          allItems.forEach((i: any) => { itemNameMap[i.$id] = i.item_name; });
+          const lookup = buildItemLookup(allItems);
 
           allRecs.forEach((r) => {
             if (allVisitIds.includes(r.visitId)) {
               // Skip §HDR§ section markers — only show actual product names
               if (r.customItem && r.customItem.startsWith("§HDR§")) return;
-              const name = r.customItem || (r.itemId ? itemNameMap[r.itemId] : "");
+              const name = resolveRecProductName(r, lookup, lookupCachedProductName);
               if (!name) return; // skip unresolved item ids / empties
               if (!recsByVisit[r.visitId]) recsByVisit[r.visitId] = [];
               recsByVisit[r.visitId].push(name);

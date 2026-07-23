@@ -15,7 +15,8 @@ interface Item {
   unit?: string;
   tallyCode?: string;
   earliestBatchExpiry?: Date | null; // FEFO: earliest batch expiry date
-  inStock?: boolean; // true → has non-zero closing_qty
+  inStock?: boolean; // true → has non-zero total batch closing qty
+  totalQty?: number; // sum of all batch closing qtys
 }
 
 const categories = ["All", "Fertilizer", "Insecticide", "Fungicide", "Herbicide", "PGR", "Organic", "Micronutrient", "Other"];
@@ -109,13 +110,26 @@ export default function ProductCatalogScreen() {
 
   const fetchItems = useCallback(async () => {
     try {
-      const allInvItems = getCollection(INVENTORY_ITEMS_COLLECTION_ID);
-      const allBatches = getCollection(INVENTORY_BATCHES_COLLECTION_ID);
+      let allInvItems = getCollection(INVENTORY_ITEMS_COLLECTION_ID);
+      let allBatches = getCollection(INVENTORY_BATCHES_COLLECTION_ID);
 
-      // Collect earliest batch expiry per item_guid (FEFO)
+      // Fresh install / empty cache: auto-pull inventory from server so the
+      // user doesn't have to manually pull-to-refresh to see products.
+      if (allInvItems.length === 0) {
+        try {
+          await syncInventoryCollections();
+          allInvItems = getCollection(INVENTORY_ITEMS_COLLECTION_ID);
+          allBatches = getCollection(INVENTORY_BATCHES_COLLECTION_ID);
+        } catch {}
+      }
+
+      // Collect earliest batch expiry + sum of closing qty per item_guid
       const batchesByGuid: Record<string, Date[]> = {};
+      const qtyByGuid: Record<string, number> = {};
       allBatches.forEach((b: any) => {
-        if (!b.expiry_date || !b.item_guid) return;
+        if (!b.item_guid) return;
+        qtyByGuid[b.item_guid] = (qtyByGuid[b.item_guid] || 0) + parseQty(b.qty);
+        if (!b.expiry_date) return;
         const d = parseBatchDate(b.expiry_date);
         if (!d) return;
         if (!batchesByGuid[b.item_guid]) batchesByGuid[b.item_guid] = [];
@@ -128,15 +142,20 @@ export default function ProductCatalogScreen() {
 
       const out: Item[] = allInvItems
         .filter((inv: any) => inv.item_name)
-        .map((inv: any) => ({
-          $id: inv.$id,
-          name: inv.item_name,
-          category: normalizeCategory(inv.stock_group),
-          unit: inv.base_unit || undefined,
-          tallyCode: inv.guid || undefined,
-          earliestBatchExpiry: earliestForGuid(inv.guid),
-          inStock: parseQty(inv.closing_qty) > 0,
-        }));
+        .map((inv: any) => {
+          const totalQty = inv.guid ? (qtyByGuid[inv.guid] || 0) : 0;
+          return {
+            $id: inv.$id,
+            name: inv.item_name,
+            category: normalizeCategory(inv.stock_group),
+            unit: inv.base_unit || undefined,
+            tallyCode: inv.guid || undefined,
+            earliestBatchExpiry: earliestForGuid(inv.guid),
+            totalQty,
+            // Prefer sum of batch closing qtys; fall back to item closing_qty
+            inStock: totalQty > 0 || parseQty(inv.closing_qty) > 0,
+          };
+        });
 
       // In-stock first, then alphabetical
       out.sort((a, b) => {
@@ -249,6 +268,14 @@ export default function ProductCatalogScreen() {
               <View style={styles.unitRow}>
                 <Beaker color="#9ca3af" size={10} />
                 <Text style={styles.unitText}>{item.unit}</Text>
+              </View>
+            )}
+            {item.totalQty !== undefined && item.totalQty > 0 && (
+              <View style={styles.qtyBadge}>
+                <Text style={styles.qtyBadgeText}>
+                  {item.totalQty % 1 === 0 ? item.totalQty : item.totalQty.toFixed(2)}
+                  {item.unit ? ` ${item.unit}` : ""}
+                </Text>
               </View>
             )}
             {(() => {
@@ -425,6 +452,8 @@ const styles = StyleSheet.create({
   categoryBadgeText: { fontSize: 10, fontWeight: "600" },
   unitRow: { flexDirection: "row", alignItems: "center", gap: 2 },
   unitText: { fontSize: 10, color: "#9ca3af" },
+  qtyBadge: { backgroundColor: "#ecfdf5", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8, borderWidth: 1, borderColor: "#bbf7d0" },
+  qtyBadgeText: { fontSize: 10, fontWeight: "700", color: "#16a34a" },
   tallyCode: { fontSize: 10, color: "#9ca3af", fontFamily: "monospace" },
   shareBtn: { width: 32, height: 32, borderRadius: 16, justifyContent: "center", alignItems: "center" },
   expiryFilterContainer: { backgroundColor: "#fff", paddingHorizontal: 16, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: "#e5e7eb" },

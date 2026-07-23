@@ -6,6 +6,8 @@ import { Search, Calendar, Package, Sprout, MapPin, ArrowLeft, Filter, X, Chevro
 import { CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, INVENTORY_ITEMS_COLLECTION_ID } from "@/lib/appwrite";
 import { getCollection } from "@/lib/sync-manager";
 import { useNetwork, useDataChange } from "@/lib/network-provider";
+import { buildItemLookup, resolveRecProductName } from "@/lib/inventory-utils";
+import { lookupCachedProductName } from "@/lib/product-name-cache";
 
 interface VisitItem {
   $id: string;
@@ -59,13 +61,12 @@ export default function AllVisitsScreen() {
 
       let allRecNames: Record<string, string[]> = {};
       try {
-        const itemNameMap: Record<string, string> = {};
-        getCollection(INVENTORY_ITEMS_COLLECTION_ID).forEach((i: any) => { itemNameMap[i.$id] = i.item_name; });
+        const lookup = buildItemLookup(getCollection(INVENTORY_ITEMS_COLLECTION_ID));
         const recsRes = getCollection(RECOMMENDATIONS_COLLECTION_ID);
         recsRes.forEach((r) => {
           // Skip §HDR§ section markers — only show actual product names
           if (r.customItem && r.customItem.startsWith("§HDR§")) return;
-          const name = r.customItem || (r.itemId ? itemNameMap[r.itemId] : "");
+          const name = resolveRecProductName(r, lookup, lookupCachedProductName);
           if (!name) return; // skip unresolved item ids / empties
           if (!allRecNames[r.visitId]) allRecNames[r.visitId] = [];
           allRecNames[r.visitId].push(name);

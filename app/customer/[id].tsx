@@ -6,7 +6,8 @@ import { ArrowLeft, Phone, MapPin, Sprout, Calendar, Package, Share2, Pencil, Ch
 import { CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, INVENTORY_ITEMS_COLLECTION_ID } from "@/lib/appwrite";
 import { getCollection, getDocument, updateDocument } from "@/lib/sync-manager";
 import { useNetwork } from "@/lib/network-provider";
-import { normalizeCategory } from "@/lib/inventory-utils";
+import { buildItemLookup, resolveRecProductName } from "@/lib/inventory-utils";
+import { lookupCachedProductName } from "@/lib/product-name-cache";
 
 interface VisitItem {
   $id: string;
@@ -76,12 +77,7 @@ export default function CustomerDetailScreen() {
       );
       visitsRes = visitsRes.filter(v => v.customerId === id).slice(0, 50);
 
-      let allItemNames: Record<string, { name: string; category?: string }> = {};
-      try {
-        getCollection(INVENTORY_ITEMS_COLLECTION_ID).forEach((i: any) => {
-          allItemNames[i.$id] = { name: i.item_name, category: normalizeCategory(i.stock_group) };
-        });
-      } catch {}
+      const lookup = buildItemLookup(getCollection(INVENTORY_ITEMS_COLLECTION_ID));
 
       const visitItems: VisitItem[] = [];
       for (const v of visitsRes) {
@@ -93,7 +89,7 @@ export default function CustomerDetailScreen() {
             // Skip §HDR§ section markers — only show actual product names
             .filter((r: any) => !(r.customItem && r.customItem.startsWith("§HDR§")))
             .map((r: any) => ({
-              name: r.customItem || (r.itemId && allItemNames[r.itemId]?.name) || "",
+              name: resolveRecProductName(r, lookup, lookupCachedProductName),
               dosage: r.dosage || undefined,
             }))
             .filter((rec) => !!rec.name); // drop unresolved item ids / empties

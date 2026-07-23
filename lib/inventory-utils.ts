@@ -55,3 +55,72 @@ export function toProductItem(inv: any, earliestBatchExpiry?: Date | null): InvI
 export function generateAppGuid(): string {
   return `app_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
+
+export interface InvItemLookupEntry {
+  name: string;
+  category?: string;
+  unit?: string;
+}
+
+// Build $id + guid → product info maps (case-insensitive keys).
+export function buildItemLookup(items: any[]): {
+  byId: Record<string, InvItemLookupEntry>;
+  byGuid: Record<string, InvItemLookupEntry>;
+} {
+  const byId: Record<string, InvItemLookupEntry> = {};
+  const byGuid: Record<string, InvItemLookupEntry> = {};
+  for (const i of items) {
+    if (!i) continue;
+    const entry: InvItemLookupEntry = {
+      name: i.item_name || i.name || "",
+      category: normalizeCategory(i.stock_group || i.category),
+      unit: i.base_unit || i.unit || undefined,
+    };
+    if (!entry.name) continue;
+    if (i.$id) byId[String(i.$id).toLowerCase()] = entry;
+    if (i.guid) byGuid[String(i.guid).toLowerCase()] = entry;
+  }
+  return { byId, byGuid };
+}
+
+// Optional durable cache fallback (itemId → name) for after inventory re-imports.
+export type CachedNameLookup = (id: string) => string;
+
+// Resolve a recommendation row to a human product name.
+// Prefer denormalized customItem (always stored for catalog picks going forward);
+// fall back to inventory lookup by itemId ($id or guid), then durable cache.
+// Never return a raw id.
+export function resolveRecProductName(
+  r: { itemId?: string | null; customItem?: string | null },
+  lookup?: { byId: Record<string, InvItemLookupEntry>; byGuid: Record<string, InvItemLookupEntry> },
+  cachedName?: CachedNameLookup,
+): string {
+  const custom = (r.customItem || "").trim();
+  if (custom.startsWith("§HDR§")) return "";
+  // Denormalized name (catalog or custom product). Catalog saves now write the
+  // product name into customItem alongside itemId so visits render without a
+  // live inventory cache.
+  if (custom) return custom;
+  const id = (r.itemId || "").trim();
+  if (!id) return "";
+  const key = id.toLowerCase();
+  if (lookup) {
+    const fromInv = lookup.byId[key]?.name || lookup.byGuid[key]?.name || "";
+    if (fromInv) return fromInv;
+  }
+  if (cachedName) {
+    const fromCache = cachedName(id);
+    if (fromCache) return fromCache;
+  }
+  return "";
+}
+
+export function resolveRecProductMeta(
+  r: { itemId?: string | null; customItem?: string | null },
+  lookup?: { byId: Record<string, InvItemLookupEntry>; byGuid: Record<string, InvItemLookupEntry> },
+): InvItemLookupEntry | null {
+  const id = (r.itemId || "").trim();
+  if (!id || !lookup) return null;
+  const key = id.toLowerCase();
+  return lookup.byId[key] || lookup.byGuid[key] || null;
+}

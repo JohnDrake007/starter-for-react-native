@@ -7,9 +7,10 @@ import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
 import { ArrowLeft, Calendar, Sprout, Package, Bell, Phone, MapPin, FileText, Camera, ExternalLink, Share2, Clock, ChevronRight, Pencil, Check, X, Trash2, PlusCircle, Search } from "@/components/Icons";
 import { CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, VISIT_PHOTOS_COLLECTION_ID, INVENTORY_ITEMS_COLLECTION_ID, STORAGE_BUCKET_ID } from "@/lib/appwrite";
-import { getCollection, getDocument, updateDocument, createDocument, deleteDocument, enqueuePhotoUpload } from "@/lib/sync-manager";
+import { getCollection, getDocument, updateDocument, createDocument, deleteDocument, enqueuePhotoUpload, syncInventoryCollections } from "@/lib/sync-manager";
 import { useNetwork } from "@/lib/network-provider";
-import { normalizeCategory } from "@/lib/inventory-utils";
+import { normalizeCategory, buildItemLookup, resolveRecProductName, resolveRecProductMeta } from "@/lib/inventory-utils";
+import { lookupCachedProductName, rememberProduct, seedProductNamesFromInventory } from "@/lib/product-name-cache";
 
 interface Customer {
   name: string;
@@ -143,9 +144,20 @@ export default function VisitDetailScreen() {
       }
       setCustomer(customerData);
 
-      // Load items catalog (products live in inventory_items now)
+      // Load items catalog (products live in inventory_items now).
+      // Seed durable name cache from current cache FIRST (before any pull that
+      // might replace inventory with new $ids after a Tally re-import).
+      let invItems = getCollection(INVENTORY_ITEMS_COLLECTION_ID);
+      seedProductNamesFromInventory(invItems);
+      if (invItems.length === 0) {
+        try {
+          await syncInventoryCollections();
+          invItems = getCollection(INVENTORY_ITEMS_COLLECTION_ID);
+          seedProductNamesFromInventory(invItems);
+        } catch {}
+      }
       try {
-        setAllItems(getCollection(INVENTORY_ITEMS_COLLECTION_ID)
+        setAllItems(invItems
           .filter((i: any) => i.item_name)
           .map((i: any) => ({
             $id: i.$id,
@@ -166,13 +178,32 @@ export default function VisitDetailScreen() {
             return ta - tb;
           });
 
-        // Build item name map from inventory_items ($id → { name, category, unit })
-        const itemMap: Record<string, { name: string; category?: string; unit?: string }> = {};
-        try {
-          getCollection(INVENTORY_ITEMS_COLLECTION_ID).forEach((i: any) => {
-            itemMap[i.$id] = { name: i.item_name, category: normalizeCategory(i.stock_group), unit: i.base_unit || undefined };
-          });
-        } catch {}
+        let lookup = buildItemLookup(invItems);
+        const cachedName = lookupCachedProductName;
+
+        // If any catalog rec still has no name (customItem / inventory / cache),
+        // try one inventory pull — name cache is seeded before replace so old
+        // ids keep resolving.
+        const needsLookup = recsRes.some((r: any) =>
+          r.itemId &&
+          !String(r.customItem || "").startsWith("§HDR§") &&
+          !resolveRecProductName(r, lookup, cachedName)
+        );
+        if (needsLookup) {
+          try {
+            await syncInventoryCollections();
+            invItems = getCollection(INVENTORY_ITEMS_COLLECTION_ID);
+            lookup = buildItemLookup(invItems);
+            setAllItems(invItems
+              .filter((i: any) => i.item_name)
+              .map((i: any) => ({
+                $id: i.$id,
+                name: i.item_name,
+                category: normalizeCategory(i.stock_group),
+                unit: i.base_unit || undefined,
+              })) as Item[]);
+          } catch {}
+        }
 
         const recs: Recommendation[] = recsRes.map((r: any) => {
           // Detect §HDR§ section markers
@@ -185,20 +216,40 @@ export default function VisitDetailScreen() {
               isSectionMarker: true, sectionTitle: parts[2] || "", sectionNote: parts[3] || "",
             };
           }
-          const itemInfo = r.itemId ? itemMap[r.itemId] : null;
+          const itemInfo = resolveRecProductMeta(r, lookup);
+          const name = resolveRecProductName(r, lookup, cachedName);
+          // Keep durable cache warm for next open
+          if (name && r.itemId) rememberProduct(r.itemId, name);
           return {
             $id: r.$id,
             itemId: r.itemId || undefined,
             customItem: r.customItem || undefined,
-            name: r.customItem ? r.customItem : (itemInfo ? itemInfo.name : r.itemId || "Unknown"),
+            name: name || "Unknown product",
             dosage: r.dosage || "",
             quantity: r.quantity || "",
             notes: r.notes || "",
-            isCustom: !!r.customItem,
+            // Catalog picks may also store name in customItem (denormalized);
+            // custom = name-only row with no itemId link.
+            isCustom: !r.itemId && !!r.customItem,
             category: itemInfo?.category,
             unit: itemInfo?.unit,
           };
         });
+
+        // Permanently backfill denormalized names onto server/local recs that
+        // only have itemId — so they keep working even if inventory is wiped.
+        for (const r of recs) {
+          if (r.isSectionMarker || !r.itemId) continue;
+          if (r.name && r.name !== "Unknown product" && !r.customItem) {
+            try {
+              await updateDocument(RECOMMENDATIONS_COLLECTION_ID, r.$id, {
+                customItem: r.name,
+              });
+              r.customItem = r.name;
+            } catch {}
+          }
+        }
+
         setRecommendations(recs);
       } catch {
         setRecommendations([]);
@@ -341,11 +392,13 @@ export default function VisitDetailScreen() {
 
   const addItemToRecs = (item: Item) => {
     if (editRecs.find((r) => r.itemId === item.$id && !r._deleted)) return;
+    rememberProduct(item.$id, item.name);
     setEditRecs((prev) => [
       ...prev,
       {
         $id: `new_${Date.now()}_${Math.random()}`,
         itemId: item.$id,
+        customItem: item.name,
         name: item.name,
         category: item.category,
         unit: item.unit,
@@ -469,11 +522,11 @@ export default function VisitDetailScreen() {
             await createDocument(RECOMMENDATIONS_COLLECTION_ID, {
               visitId: id,
               itemId: rec.isSectionMarker ? undefined : rec.isCustom ? undefined : rec.itemId,
+              // Always store display name in customItem (denormalized) so
+              // re-open works without inventory cache. Section markers keep §HDR§.
               customItem: rec.isSectionMarker
                 ? `§HDR§${rec.sectionTitle || ""}§${rec.sectionNote || ""}`
-                : rec.isCustom
-                ? rec.customItem
-                : undefined,
+                : (rec.isCustom ? rec.customItem : rec.name) || rec.name || undefined,
               dosage: rec.dosage || undefined,
               quantity: rec.quantity || undefined,
               notes: rec.notes || undefined,
@@ -1000,13 +1053,14 @@ export default function VisitDetailScreen() {
                               style={styles.itemRow}
                               onPress={() => {
                                 if (editRecs.find(r => r.itemId === item.$id && !r._deleted)) return;
+                                rememberProduct(item.$id, item.name);
                                 // Insert after the last product of this section (before next section marker)
                                 const markerIdx = editRecs.findIndex(r => r.$id === sec.markerId);
                                 const nextMarkerIdx = editRecs.findIndex((r, i) => i > markerIdx && r.isSectionMarker);
                                 const insertAt = nextMarkerIdx === -1 ? editRecs.length : nextMarkerIdx;
                                 const newRec: Recommendation = {
                                   $id: `new_${Date.now()}_${Math.random()}`,
-                                  itemId: item.$id, name: item.name, category: item.category,
+                                  itemId: item.$id, customItem: item.name, name: item.name, category: item.category,
                                   unit: item.unit, dosage: "", quantity: "", notes: "", isCustom: false,
                                 };
                                 setEditRecs(prev => [
