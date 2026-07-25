@@ -189,6 +189,14 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
   // backgrounded, not killed) — e.g. the device reconnects while backgrounded.
   // Without this, offline edits made before backgrounding never auto-sync until
   // the user manually pulls-to-refresh a screen.
+  //
+  // NOTE: We deliberately do NOT tear down the realtime websocket here. The
+  // Appwrite client manages its own reconnect/backoff; calling stopRealtime()
+  // + startRealtime() on every AppState "active" churned the websocket on every
+  // app resume and burned through the free-tier realtime connection quota.
+  // The realtime socket is only torn down when the device goes offline (in the
+  // NetInfo handler below); startRealtime() here is idempotent and will re-arm
+  // the socket only if a previous offline event had torn it down.
   useEffect(() => {
     const subscription = AppState.addEventListener("change", async (nextState: AppStateStatus) => {
       if (nextState !== "active") return;
@@ -200,11 +208,11 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
       if (online) {
         setOnline();
         wasOfflineRef.current = false;
+        // Re-arm realtime only if it isn't already running (no-op if active).
         startRealtime();
         await attemptSync();
       } else {
         wasOfflineRef.current = true;
-        stopRealtime();
         setOffline();
         clearRetry();
       }

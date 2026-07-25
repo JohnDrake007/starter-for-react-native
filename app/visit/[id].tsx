@@ -236,19 +236,12 @@ export default function VisitDetailScreen() {
           };
         });
 
-        // Permanently backfill denormalized names onto server/local recs that
-        // only have itemId — so they keep working even if inventory is wiped.
-        for (const r of recs) {
-          if (r.isSectionMarker || !r.itemId) continue;
-          if (r.name && r.name !== "Unknown product" && !r.customItem) {
-            try {
-              await updateDocument(RECOMMENDATIONS_COLLECTION_ID, r.$id, {
-                customItem: r.name,
-              });
-              r.customItem = r.name;
-            } catch {}
-          }
-        }
+        // NOTE: The per-rec `customItem` backfill that used to run here issued
+        // one updateDocument per eligible recommendation on EVERY focus of this
+        // screen, draining the free-tier write quota. It is now handled by the
+        // one-shot migration script:
+        //   tally-sync-desktop/scripts/backfill-customitem.js
+        // Run that once and the names will persist server-side thereafter.
 
         setRecommendations(recs);
       } catch {
