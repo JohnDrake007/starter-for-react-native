@@ -8,33 +8,38 @@ import { getDocument, updateDocument, getCollection, syncInventoryCollections } 
 import { useNetwork } from "@/lib/network-provider";
 import { normalizeCategory, parseQty } from "@/lib/inventory-utils";
 
-const categories = ["Fertilizer", "Insecticide", "Fungicide", "Herbicide", "PGR", "Organic", "Micronutrient", "Other"];
-const units = ["kg", "g", "L", "ml", "packet", "bottle", "bag", "tablet", "piece"];
+const categories = [
+  "AGRO CHEMICALS",
+  "CHEMICAL FERTILIZERS",
+  "BIO PRODUCTS",
+  "AGRICULTURAL IMPLIMENTS",
+  "GENERAL",
+  "SPRAYER",
+];
+const units = ["kg", "g", "L", "ml", "packet", "bottle", "bag", "tablet", "piece", "NOS"];
 
 const getCategoryColor = (category: string | null | undefined) => {
-  switch (category) {
-    case "Fertilizer": return { bg: "#dcfce7", text: "#15803d" };
-    case "Insecticide": return { bg: "#fecdd3", text: "#be123c" };
-    case "Fungicide": return { bg: "#e9d5ff", text: "#7c3aed" };
-    case "Herbicide": return { bg: "#fef3c7", text: "#b45309" };
-    case "PGR": return { bg: "#cffafe", text: "#0e7490" };
-    case "Organic": return { bg: "#ecfccb", text: "#4d7c0f" };
-    case "Micronutrient": return { bg: "#fed7aa", text: "#c2410c" };
-    default: return { bg: "#f3f4f6", text: "#6b7280" };
-  }
+  if (!category) return { bg: "#f3f4f6", text: "#6b7280" };
+  const cat = category.toUpperCase();
+  if (cat.includes("AGRO CHEMICALS")) return { bg: "#fecdd3", text: "#be123c" };
+  if (cat.includes("CHEMICAL FERTILIZERS") || cat.includes("FERTILIZER")) return { bg: "#dcfce7", text: "#15803d" };
+  if (cat.includes("BIO PRODUCTS") || cat.includes("ORGANIC")) return { bg: "#ecfccb", text: "#4d7c0f" };
+  if (cat.includes("AGRICULTURAL IMPLIMENTS") || cat.includes("IMPLIMENTS")) return { bg: "#cffafe", text: "#0e7490" };
+  if (cat.includes("SPRAYER")) return { bg: "#e9d5ff", text: "#7c3aed" };
+  if (cat.includes("GENERAL")) return { bg: "#fef3c7", text: "#b45309" };
+  return { bg: "#f3f4f6", text: "#6b7280" };
 };
 
 const getCategoryIcon = (category: string | null | undefined) => {
-  switch (category) {
-    case "Fertilizer": return "🌱";
-    case "Insecticide": return "🪲";
-    case "Fungicide": return "🍄";
-    case "Herbicide": return "🌿";
-    case "PGR": return "📈";
-    case "Organic": return "🍃";
-    case "Micronutrient": return "💊";
-    default: return "📦";
-  }
+  if (!category) return "📦";
+  const cat = category.toUpperCase();
+  if (cat.includes("AGRO CHEMICALS")) return "🧪";
+  if (cat.includes("CHEMICAL FERTILIZERS") || cat.includes("FERTILIZER")) return "🌱";
+  if (cat.includes("BIO PRODUCTS") || cat.includes("ORGANIC")) return "🍃";
+  if (cat.includes("AGRICULTURAL IMPLIMENTS") || cat.includes("IMPLIMENTS")) return "🚜";
+  if (cat.includes("SPRAYER")) return "💦";
+  if (cat.includes("GENERAL")) return "📦";
+  return "📦";
 };
 
 interface InventoryBatch {

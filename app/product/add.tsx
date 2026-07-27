@@ -7,8 +7,15 @@ import { INVENTORY_ITEMS_COLLECTION_ID } from "@/lib/appwrite";
 import { createDocument } from "@/lib/sync-manager";
 import { generateAppGuid } from "@/lib/inventory-utils";
 
-const categories = ["Fertilizer", "Insecticide", "Fungicide", "Herbicide", "PGR", "Organic", "Micronutrient", "Other"];
-const units = ["kg", "g", "L", "ml", "packet", "bottle", "bag", "tablet", "piece"];
+const categories = [
+  "AGRO CHEMICALS",
+  "CHEMICAL FERTILIZERS",
+  "BIO PRODUCTS",
+  "AGRICULTURAL IMPLIMENTS",
+  "GENERAL",
+  "SPRAYER",
+];
+const units = ["kg", "g", "L", "ml", "packet", "bottle", "bag", "tablet", "piece", "NOS"];
 
 export default function AddProductScreen() {
   const router = useRouter();

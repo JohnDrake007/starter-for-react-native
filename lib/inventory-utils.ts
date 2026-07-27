@@ -11,21 +11,13 @@ export interface InvItemProduct {
   earliestBatchExpiry?: Date | null;
 }
 
-// Map a Tally stock_group name to the app's product category taxonomy.
-// Pass-through for app-created items whose stock_group already holds a
-// normalized category (e.g. "Fertilizer") — normalizeCategory("Fertilizer")
-// still returns "Fertilizer".
+// Map a Tally stock_group (PARENT tag) to category name.
+// Returns the exact stock group name (e.g., "AGRO CHEMICALS", "CHEMICAL FERTILIZERS")
 export function normalizeCategory(stockGroup: string | null | undefined): string | undefined {
   if (!stockGroup) return undefined;
-  const g = stockGroup.toUpperCase();
-  if (g.includes("FERTILIZER") || g.includes("FERTILISER")) return "Fertilizer";
-  if (g.includes("INSECTICIDE") || g.includes("PESTICIDE")) return "Insecticide";
-  if (g.includes("FUNGICIDE")) return "Fungicide";
-  if (g.includes("HERBICIDE") || g.includes("WEEDICIDE")) return "Herbicide";
-  if (g.includes("PGR") || g.includes("GROWTH")) return "PGR";
-  if (g.includes("ORGANIC") || g.includes("BIO")) return "Organic";
-  if (g.includes("MICRO") || g.includes("NUTRIENT")) return "Micronutrient";
-  return "Other";
+  const g = stockGroup.trim();
+  if (!g || g.includes("Primary") || g === "&#4; Primary") return "GENERAL";
+  return g;
 }
 
 // Parse a Tally quantity string like "421.00 NOS" → number 421.
