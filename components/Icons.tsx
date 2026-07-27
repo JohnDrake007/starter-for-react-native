@@ -156,8 +156,6 @@ export const Beaker = createStrokeIcon(["M4 2h16l-2 12H6L4 2zM6 14l-2 6h16l-2-6"
 
 export const Hash = createStrokeIcon(["M4 9h16M4 15h16M10 3L8 21M16 3l-2 18"]);
 
-export const RefreshCw = createStrokeIcon(["M23 4v6h-6", "M1 20v-6h6", "M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"]);
-
 export const Wifi = createStrokeIcon(["M5 12.55a11 11 0 0 1 14.08 0", "M1.42 9a16 16 0 0 1 21.16 0", "M8.53 16.11a6 6 0 0 1 6.95 0", "M12 20h.01"]);
 
 export const WifiOff = createStrokeIcon(["M1 1l22 22", "M16.72 11.06A10.94 10.94 0 0 1 19 12.55", "M5 12.55a10.94 10.94 0 0 1 5.17-2.39", "M10.71 5.05A16 16 0 0 1 22.56 9", "M1.42 9a15.91 15.91 0 0 1 4.7-2.88", "M8.53 16.11a6 6 0 0 1 6.95 0", "M12 20h.01"]);
