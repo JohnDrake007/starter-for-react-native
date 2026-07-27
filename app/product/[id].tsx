@@ -1,12 +1,12 @@
-import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity, Alert, Linking, TextInput } from "react-native";
+import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity, Alert, Linking, TextInput, Platform, ActivityIndicator } from "react-native";
 import { useState, useCallback } from "react";
 import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ArrowLeft, Package, Tag, Beaker, Clock, Pencil, Check, X, Share2 } from "@/components/Icons";
+import { ArrowLeft, Package, Tag, Beaker, Clock, Pencil, Check, X, Share2, RefreshCw } from "@/components/Icons";
 import { INVENTORY_ITEMS_COLLECTION_ID, INVENTORY_BATCHES_COLLECTION_ID } from "@/lib/appwrite";
 import { getDocument, updateDocument, getCollection, syncInventoryCollections } from "@/lib/sync-manager";
 import { useNetwork } from "@/lib/network-provider";
-import { normalizeCategory, parseQty } from "@/lib/inventory-utils";
+import { normalizeCategory, parseQty, alignBatchQtysToClosing } from "@/lib/inventory-utils";
 
 const categories = [
   "AGRO CHEMICALS",
@@ -156,7 +156,7 @@ export default function ProductDetailScreen() {
         setEditCategory(doc.category || "");
         setEditUnit(doc.unit || "");
 
-        const itemBatches = allBatches
+        const rawBatches = allBatches
           .filter((b: any) => b.item_guid === invItem.guid)
           .map((b: any) => {
             let daysUntilExpiry: number | null = null;
@@ -179,7 +179,8 @@ export default function ProductDetailScreen() {
             if (!bDate) return -1;
             return aDate.getTime() - bDate.getTime();
           });
-        setBatches(itemBatches);
+        // Batch docs may still hold opening qty; scale to item closing_qty.
+        setBatches(alignBatchQtysToClosing(rawBatches, invItem.closing_qty) as InventoryBatch[]);
       }
     } catch {}
     setLoading(false);
@@ -187,6 +188,9 @@ export default function ProductDetailScreen() {
 
   useFocusEffect(useCallback(() => {
     loadData();
+    if (Platform.OS === "web" || getCollection(INVENTORY_BATCHES_COLLECTION_ID).length === 0) {
+      syncInventoryCollections().then(() => loadData());
+    }
   }, [loadData]));
 
   const onRefresh = useCallback(async () => {
@@ -236,7 +240,11 @@ export default function ProductDetailScreen() {
     lines.push("📛 *Name:* " + product.name);
     if (product.category) lines.push("🏷️ *Category:* " + product.category);
     if (product.unit) lines.push("🧪 *Unit:* " + product.unit);
-    const shareTotalQty = batches.reduce((sum, b) => sum + parseQty(b.qty), 0);
+    const shareClosingRaw = product.closing_qty ?? inventoryItem?.closing_qty;
+    const shareHasClosing = shareClosingRaw !== undefined && shareClosingRaw !== null && String(shareClosingRaw).trim() !== "";
+    const shareTotalQty = shareHasClosing
+      ? parseQty(shareClosingRaw)
+      : batches.reduce((sum, b) => sum + parseQty(b.qty), 0);
     if (shareTotalQty > 0 || batches.length > 0) {
       lines.push("📊 *Total Qty:* " + (shareTotalQty % 1 === 0 ? shareTotalQty : shareTotalQty.toFixed(2)) + (product.unit ? " " + product.unit : ""));
     }
@@ -273,8 +281,11 @@ export default function ProductDetailScreen() {
   }
 
   const colors = getCategoryColor(product.category);
-  // Product-level stock = sum of every batch's current (closing) qty.
+  // Prefer item closing_qty (Tally live stock, includes legitimate 0); fall back to batches.
+  const closingRaw = product.closing_qty ?? inventoryItem?.closing_qty;
+  const hasClosingField = closingRaw !== undefined && closingRaw !== null && String(closingRaw).trim() !== "";
   const totalBatchQty = batches.reduce((sum, b) => sum + parseQty(b.qty), 0);
+  const totalQty = hasClosingField ? parseQty(closingRaw) : totalBatchQty;
   const unitLabel = inventoryItem?.base_unit || product.unit || "";
 
   return (
@@ -296,7 +307,10 @@ export default function ProductDetailScreen() {
             </TouchableOpacity>
           </View>
         ) : (
-<View style={{ flexDirection: "row", gap: 8 }}>
+          <View style={{ flexDirection: "row", gap: 8 }}>
+            <TouchableOpacity style={styles.headerAction} onPress={onRefresh} disabled={refreshing}>
+              {refreshing ? <ActivityIndicator size="small" color="#16a34a" /> : <RefreshCw color="#16a34a" size={18} />}
+            </TouchableOpacity>
             <TouchableOpacity style={styles.headerAction} onPress={shareProduct}>
               <Share2 color="#16a34a" size={18} />
             </TouchableOpacity>
@@ -376,13 +390,13 @@ export default function ProductDetailScreen() {
                 <View style={[styles.stockCard, styles.stockCardHighlight]}>
                   <Text style={styles.stockCardLabel}>Total Qty</Text>
                   <Text style={[styles.stockCardValue, styles.stockCardValueGreen]}>
-                    {totalBatchQty % 1 === 0 ? totalBatchQty : totalBatchQty.toFixed(2)}
+                    {totalQty % 1 === 0 ? totalQty : totalQty.toFixed(2)}
                     {unitLabel ? ` ${unitLabel}` : ""}
                   </Text>
                   <Text style={styles.stockCardSub}>
                     {batches.length > 0
-                      ? `Sum of ${batches.length} batch${batches.length === 1 ? "" : "es"}`
-                      : "No batches"}
+                      ? `Closing · ${batches.length} batch${batches.length === 1 ? "" : "es"}`
+                      : "Closing balance"}
                   </Text>
                 </View>
               </View>

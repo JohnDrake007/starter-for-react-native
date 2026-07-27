@@ -116,3 +116,39 @@ export function resolveRecProductMeta(
   const key = id.toLowerCase();
   return lookup.byId[key] || lookup.byGuid[key] || null;
 }
+
+// Tally batch rows often store opening qty while inventory_items.closing_qty is
+// the live stock. Scale batch.qty so batches sum to item closing (display-time
+// fix until the next desktop sync rewrites batch docs).
+export function alignBatchQtysToClosing<T extends { qty?: any }>(
+  batches: T[],
+  closingQty: any,
+): (T & { qty: number })[] {
+  if (!batches.length) return [];
+  const target = parseQty(closingQty);
+  const withQty = batches.map((b) => ({ ...b, qty: parseQty(b.qty) }));
+  const sum = withQty.reduce((s, b) => s + b.qty, 0);
+  if (!isFinite(target) || Math.abs(sum - target) < 0.001) return withQty;
+
+  if (withQty.length === 1) {
+    withQty[0].qty = target;
+    return withQty;
+  }
+
+  const weights = withQty.map((b) => Math.abs(b.qty));
+  const weightSum = weights.reduce((s, w) => s + w, 0);
+  let allocated = 0;
+  for (let i = 0; i < withQty.length; i++) {
+    if (i === withQty.length - 1) {
+      withQty[i].qty = Math.round((target - allocated) * 1000) / 1000;
+    } else if (weightSum > 0) {
+      const q = Math.round((target * (weights[i] / weightSum)) * 1000) / 1000;
+      withQty[i].qty = q;
+      allocated += q;
+    } else {
+      withQty[i].qty = i === 0 ? target : 0;
+      allocated += withQty[i].qty;
+    }
+  }
+  return withQty;
+}

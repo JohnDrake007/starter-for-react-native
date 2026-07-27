@@ -1,8 +1,8 @@
-import { View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, RefreshControl, ScrollView, Linking } from "react-native";
+import { View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, RefreshControl, ScrollView, Linking, Platform, ActivityIndicator } from "react-native";
 import { useState, useCallback, useMemo } from "react";
 import { useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ArrowLeft, Search, Package, Tag, Beaker, Share2, Plus, X, Calendar, Clock } from "@/components/Icons";
+import { ArrowLeft, Search, Package, Tag, Beaker, Share2, Plus, X, Calendar, Clock, RefreshCw } from "@/components/Icons";
 import { INVENTORY_ITEMS_COLLECTION_ID, INVENTORY_BATCHES_COLLECTION_ID } from "@/lib/appwrite";
 import { getCollection, syncInventoryCollections } from "@/lib/sync-manager";
 import { useNetwork, useDataChange } from "@/lib/network-provider";
@@ -155,7 +155,11 @@ export default function ProductCatalogScreen() {
       const out: Item[] = allInvItems
         .filter((inv: any) => inv.item_name)
         .map((inv: any) => {
-          const totalQty = inv.guid ? (qtyByGuid[inv.guid] || 0) : 0;
+          // Item closing_qty is Tally live stock (authoritative, includes 0).
+          // Batch sum can still be opening until desktop re-syncs aligned qtys.
+          const hasClosing = inv.closing_qty !== undefined && inv.closing_qty !== null && String(inv.closing_qty).trim() !== "";
+          const batchSum = inv.guid ? (qtyByGuid[inv.guid] || 0) : 0;
+          const totalQty = hasClosing ? parseQty(inv.closing_qty) : batchSum;
           return {
             $id: inv.$id,
             name: inv.item_name,
@@ -164,8 +168,7 @@ export default function ProductCatalogScreen() {
             tallyCode: inv.guid || undefined,
             earliestBatchExpiry: earliestForGuid(inv.guid),
             totalQty,
-            // Prefer sum of batch closing qtys; fall back to item closing_qty
-            inStock: totalQty > 0 || parseQty(inv.closing_qty) > 0,
+            inStock: totalQty > 0,
           };
         });
 
@@ -182,6 +185,9 @@ export default function ProductCatalogScreen() {
 
   useFocusEffect(useCallback(() => {
     fetchItems();
+    if (Platform.OS === "web" || getCollection(INVENTORY_ITEMS_COLLECTION_ID).length === 0) {
+      syncInventoryCollections().then(() => fetchItems());
+    }
   }, [fetchItems]));
 
   // Live-refresh when data changes (realtime events / sync).
@@ -327,9 +333,14 @@ export default function ProductCatalogScreen() {
           <Text style={styles.headerTitle}>Product Catalog</Text>
           <Text style={styles.headerSub}>{filteredItems.length} product{filteredItems.length !== 1 ? "s" : ""}</Text>
         </View>
-        <TouchableOpacity style={styles.headerAction} onPress={shareAllProducts}>
-          <Share2 color="#16a34a" size={18} />
-        </TouchableOpacity>
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          <TouchableOpacity style={styles.headerAction} onPress={onRefresh} disabled={refreshing}>
+            {refreshing ? <ActivityIndicator size="small" color="#16a34a" /> : <RefreshCw color="#16a34a" size={18} />}
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.headerAction} onPress={shareAllProducts}>
+            <Share2 color="#16a34a" size={18} />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <View style={styles.searchContainer}>

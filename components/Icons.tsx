@@ -114,6 +114,12 @@ export const Share2 = createStrokeIcon([
   "M16 6l-4-4-4 4M12 2v13",
 ]);
 
+export const RefreshCw = createStrokeIcon([
+  "M23 4v6h-6",
+  "M1 20v-6h6",
+  "M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15",
+]);
+
 export const Clock = createStrokeIcon(["M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z", "M12 6v6l4 2"]);
 
 export const Tag = createStrokeIcon(["M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82zM7 7h.01"]);
