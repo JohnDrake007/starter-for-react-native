@@ -1,7 +1,7 @@
 import { Client, Account, Databases, Storage, Query, ID } from "react-native-appwrite";
 
 const APPWRITE_ENDPOINT = process.env.EXPO_PUBLIC_APPWRITE_ENDPOINT || "https://sgp.cloud.appwrite.io/v1";
-const APPWRITE_PROJECT_ID = process.env.EXPO_PUBLIC_APPWRITE_PROJECT_ID || "6a4f0f7d0023e2fcb295";
+const APPWRITE_PROJECT_ID = process.env.EXPO_PUBLIC_APPWRITE_PROJECT_ID || "6a66f8ef002fdf2c8e1f";
 const APPWRITE_DATABASE_ID = process.env.EXPO_PUBLIC_APPWRITE_DATABASE_ID || "field_agent_db";
 
 const client = new Client()

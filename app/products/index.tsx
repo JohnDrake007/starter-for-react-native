@@ -110,18 +110,16 @@ export default function ProductCatalogScreen() {
 
   const fetchItems = useCallback(async () => {
     try {
-      let allInvItems = getCollection(INVENTORY_ITEMS_COLLECTION_ID);
-      let allBatches = getCollection(INVENTORY_BATCHES_COLLECTION_ID);
-
-      // Fresh install / empty cache: auto-pull inventory from server so the
-      // user doesn't have to manually pull-to-refresh to see products.
-      if (allInvItems.length === 0) {
-        try {
-          await syncInventoryCollections();
-          allInvItems = getCollection(INVENTORY_ITEMS_COLLECTION_ID);
-          allBatches = getCollection(INVENTORY_BATCHES_COLLECTION_ID);
-        } catch {}
-      }
+      // NOTE: We no longer auto-pull inventory here when the cache is empty.
+      // Pulling on every focus drained the Appwrite free-tier read quota
+      // (each call = 2 paginated listDocuments reads) and only ever fired
+      // on a fresh install / cache wipe, after which it never ran again —
+      // so the cost-per-useful-pull ratio was extremely poor. Inventory is
+      // kept live by the realtime subscription (see sync-manager.ts) and is
+      // pulled on explicit pull-to-refresh (onRefresh below) / Sync Now.
+      // First-launch UX shows an empty list with a hint to pull-to-refresh.
+      const allInvItems = getCollection(INVENTORY_ITEMS_COLLECTION_ID);
+      const allBatches = getCollection(INVENTORY_BATCHES_COLLECTION_ID);
 
       // Collect earliest batch expiry + sum of closing qty per item_guid
       const batchesByGuid: Record<string, Date[]> = {};
@@ -388,8 +386,17 @@ export default function ProductCatalogScreen() {
           <View style={styles.emptyIcon}>
             <Package color="#9ca3af" size={28} />
           </View>
-          <Text style={styles.emptyTitle}>No products found</Text>
-          <Text style={styles.emptySub}>Try a different search or add a new product</Text>
+          {items.length === 0 ? (
+            <>
+              <Text style={styles.emptyTitle}>No products loaded</Text>
+              <Text style={styles.emptySub}>Pull down to refresh and load inventory</Text>
+            </>
+          ) : (
+            <>
+              <Text style={styles.emptyTitle}>No products found</Text>
+              <Text style={styles.emptySub}>Try a different search or add a new product</Text>
+            </>
+          )}
         </View>
       ) : (
         <FlatList
