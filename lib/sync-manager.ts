@@ -25,8 +25,11 @@ const STORAGE_KEYS: Record<string, string> = {
 const PENDING_QUEUE_KEY = "@fa_pending_queue";
 const LAST_SYNC_KEY = "@fa_last_sync";
 const LAST_INVENTORY_SYNC_KEY = "@fa_last_inventory_sync";
+const LAST_CORE_FULL_SYNC_KEY = "@fa_last_core_full_sync";
+const LAST_INVENTORY_FULL_SYNC_KEY = "@fa_last_inventory_full_sync";
 const CORE_PULL_MIN_INTERVAL_MS = 5 * 60 * 1000;
 const INVENTORY_PULL_MIN_INTERVAL_MS = 15 * 60 * 1000;
+const FULL_RECONCILIATION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 export type SyncStatus = "idle" | "syncing" | "error" | "offline";
@@ -81,6 +84,8 @@ const cache: Record<string, any[]> = {};
 let pendingQueue: PendingMutation[] = [];
 let lastSyncTime: string | null = null;
 let lastInventorySyncTime: string | null = null;
+let lastCoreFullSyncTime: string | null = null;
+let lastInventoryFullSyncTime: string | null = null;
 let currentStatus: SyncStatus = "idle";
 const listeners: Set<SyncListener> = new Set();
 // Fired whenever the local cache is mutated (pull, push, or a realtime event)
@@ -498,6 +503,8 @@ export async function initSync(): Promise<void> {
     // Load last sync time
     lastSyncTime = await AsyncStorage.getItem(LAST_SYNC_KEY);
     lastInventorySyncTime = await AsyncStorage.getItem(LAST_INVENTORY_SYNC_KEY);
+    lastCoreFullSyncTime = await AsyncStorage.getItem(LAST_CORE_FULL_SYNC_KEY);
+    lastInventoryFullSyncTime = await AsyncStorage.getItem(LAST_INVENTORY_FULL_SYNC_KEY);
   } catch (e) {
     console.warn("[SyncManager] initSync error:", e);
   } finally {
@@ -1002,6 +1009,10 @@ export async function syncNow(options: { forcePull?: boolean } = {}): Promise<vo
 
 async function runSync(options: { forcePull?: boolean }): Promise<void> {
   broadcast("syncing");
+  // Persist the cycle start (not the finish) as the incremental cursor. A
+  // document changed while this cycle is running may then be read twice on the
+  // next cycle, but can never fall into a timestamp gap and be missed.
+  const syncStartedAt = new Date().toISOString();
 
   try {
     const hadPending = pendingQueue.length > 0;
@@ -1026,11 +1037,11 @@ async function runSync(options: { forcePull?: boolean }): Promise<void> {
 
     if (shouldPull) {
       // ── 2. Pull fresh data from all collections ──
-      await pullAllCollections();
+      await pullAllCollections(options.forcePull === true, syncStartedAt);
       reconciliationRequired = false;
 
       // ── 3. Update last successful reconciliation time ──
-      lastSyncTime = new Date().toISOString();
+      lastSyncTime = syncStartedAt;
       await AsyncStorage.setItem(LAST_SYNC_KEY, lastSyncTime);
 
       // ── 4. Re-schedule device notifications to reflect fresh data ──
@@ -1200,56 +1211,116 @@ async function pushPhotoUpload(
 }
 
 /**
+ * Fetch every matching document with cursor pagination.
+ */
+async function fetchAllDocuments(
+  collectionId: string,
+  filters: string[] = []
+): Promise<any[]> {
+  const documents: any[] = [];
+  let cursor: string | null = null;
+  const limit = 1000;
+
+  while (true) {
+    const queries = [
+      ...filters,
+      Query.limit(limit),
+      Query.orderDesc("$updatedAt"),
+    ];
+    if (cursor) queries.push(Query.cursorAfter(cursor));
+    const res = await databases.listDocuments(DATABASE_ID, collectionId, queries);
+    documents.push(...(res.documents as any[]));
+    const total = Number(res.total);
+    if (Number.isFinite(total) && documents.length >= total) break;
+    if (res.documents.length < limit) break;
+    cursor = res.documents[res.documents.length - 1].$id;
+  }
+
+  return documents;
+}
+
+function replaceServerDocuments(collectionId: string, serverDocuments: any[]): void {
+  const localOnly = (cache[collectionId] || []).filter(
+    (doc: any) => doc.$id?.startsWith("local_")
+  );
+  cache[collectionId] = [...localOnly, ...serverDocuments];
+}
+
+/**
+ * Pull only documents changed since the previous successful cycle, then issue
+ * a one-row count probe. Because Appwrite bills reads per returned document
+ * rather than per HTTP call, this normally costs one read for an empty delta
+ * plus one read for the count probe instead of re-reading the whole collection.
+ *
+ * A hard delete is not present in an updated-at query. It changes the server
+ * count, however, so a count mismatch immediately triggers a full collection
+ * reconciliation. Creates (including an equal number of creates and deletes)
+ * are upserted before comparing counts, which also exposes the mismatch.
+ */
+async function pullCollection(
+  collectionId: string,
+  since: string | null,
+  forceFull: boolean
+): Promise<void> {
+  if (forceFull || !since) {
+    replaceServerDocuments(collectionId, await fetchAllDocuments(collectionId));
+    await persistCollection(collectionId);
+    return;
+  }
+
+  const changed = await fetchAllDocuments(
+    collectionId,
+    [Query.greaterThanEqual("$updatedAt", since)]
+  );
+  for (const document of changed) {
+    if (!hasPendingMutation(collectionId, document.$id)) {
+      upsertIntoCache(collectionId, document);
+    }
+  }
+
+  // `total` describes every visible document even though only one is returned.
+  // That one returned document is the only billed row read for this probe.
+  const countProbe = await databases.listDocuments(
+    DATABASE_ID,
+    collectionId,
+    [Query.limit(1)]
+  );
+  const localServerCount = (cache[collectionId] || []).filter(
+    (document: any) => !document.$id?.startsWith("local_")
+  ).length;
+  const serverCount = Number(countProbe.total);
+
+  if (!Number.isFinite(serverCount) || localServerCount !== serverCount) {
+    replaceServerDocuments(collectionId, await fetchAllDocuments(collectionId));
+  }
+  await persistCollection(collectionId);
+}
+
+/**
  * Pull data from Appwrite and merge it into the local cache.
  *
- * A full pull with delete reconciliation is performed every sync (not a delta
- * pull). This is essential because Appwrite's listDocuments endpoint only
- * returns documents that still exist — a delta pull based on `$updatedAt`
- * catches adds and modifies but can never detect deletes (a deleted document
- * has no `$updatedAt` to filter on). Without full reconciliation, deletes
- * made on the server or by another device would remain as stale ghosts in the
- * local cache forever, causing the exact cross-device inconsistencies reported
- * (duplicate recommendations after edit, deleted photos reappearing, etc.).
- *
- * The pull is paginated to handle collections larger than the page size, and
- * the upsert-by-`$id` merge keeps it idempotent — no duplicate entries on
- * repeated sync attempts. Local-only pending documents are always preserved.
+ * Routine pulls use updated-at deltas plus count probes. First sync, manual
+ * refresh, and a weekly safety pass perform full cursor-paginated scans. Count
+ * divergence also immediately promotes just that collection to a full scan,
+ * preserving hard-delete reconciliation without paying for every row whenever
+ * the app resumes.
  */
-async function pullAllCollections(): Promise<void> {
+async function pullAllCollections(
+  forceFull = false,
+  syncStartedAt = new Date().toISOString()
+): Promise<void> {
   const failures: string[] = [];
+  const fullSyncAge = lastCoreFullSyncTime
+    ? Date.now() - new Date(lastCoreFullSyncTime).getTime()
+    : Number.POSITIVE_INFINITY;
+  const fullAll =
+    forceFull ||
+    !lastSyncTime ||
+    fullSyncAge >= FULL_RECONCILIATION_MAX_AGE_MS;
+
   for (const collectionId of SYNCABLE_COLLECTIONS) {
     try {
-      // Paginated full pull — fetch every document currently on the server.
-      const allServerDocs: any[] = [];
-      let cursor: string | null = null;
-      const limit = 1000;
-
-      while (true) {
-        const queries = [
-          Query.limit(limit),
-          Query.orderDesc("$createdAt"),
-        ];
-        if (cursor) queries.push(Query.cursorAfter(cursor));
-        const res = await databases.listDocuments(DATABASE_ID, collectionId, queries);
-        allServerDocs.push(...(res.documents as any[]));
-        if (res.documents.length < limit) break;
-        cursor = res.documents[res.documents.length - 1].$id;
-      }
-
-      // Reconcile deletes — remove any server-id docs from the local cache
-      // that no longer exist on the server. Local-only pending docs (local_
-      // ids that haven't been pushed yet) are always kept.
-      const serverIds = new Set(allServerDocs.map((d: any) => d.$id));
-      const existing = cache[collectionId] || [];
-      cache[collectionId] = existing.filter(
-        (d: any) => d.$id.startsWith("local_") || serverIds.has(d.$id)
-      );
-
-      // Idempotent upsert: update existing entries or add new ones by $id.
-      for (const doc of allServerDocs) {
-        upsertIntoCache(collectionId, doc);
-      }
-      await persistCollection(collectionId);
+      await pullCollection(collectionId, lastSyncTime, fullAll);
     } catch (e) {
       console.warn(`[SyncManager] Pull failed for ${collectionId}:`, e);
       // Keep existing local data on failure — offline resilience
@@ -1258,6 +1329,10 @@ async function pullAllCollections(): Promise<void> {
   }
   if (failures.length > 0) {
     throw new Error(`Could not refresh ${failures.join(", ")}`);
+  }
+  if (fullAll) {
+    lastCoreFullSyncTime = syncStartedAt;
+    await AsyncStorage.setItem(LAST_CORE_FULL_SYNC_KEY, lastCoreFullSyncTime);
   }
 }
 
@@ -1272,13 +1347,14 @@ export async function syncInventoryCollections(force = false): Promise<void> {
     : Number.POSITIVE_INFINITY;
   if (!force && lastPullAge < INVENTORY_PULL_MIN_INTERVAL_MS) return;
 
-  activeInventorySync = runInventorySync().finally(() => {
+  activeInventorySync = runInventorySync(force).finally(() => {
     activeInventorySync = null;
   });
   return activeInventorySync;
 }
 
-async function runInventorySync(): Promise<void> {
+async function runInventorySync(forceFull = false): Promise<void> {
+  const syncStartedAt = new Date().toISOString();
   // Snapshot names from whatever is currently cached BEFORE replace, so a
   // Tally re-import (new Appwrite $ids) doesn't break old recommendation links.
   try {
@@ -1287,33 +1363,17 @@ async function runInventorySync(): Promise<void> {
   } catch {}
 
   const failures: string[] = [];
+  const fullSyncAge = lastInventoryFullSyncTime
+    ? Date.now() - new Date(lastInventoryFullSyncTime).getTime()
+    : Number.POSITIVE_INFINITY;
+  const fullAll =
+    forceFull ||
+    !lastInventorySyncTime ||
+    fullSyncAge >= FULL_RECONCILIATION_MAX_AGE_MS;
+
   for (const collectionId of INVENTORY_COLLECTIONS) {
     try {
-      const allDocs: any[] = [];
-      let cursor: string | null = null;
-      const limit = 1000;
-
-      while (true) {
-        const queries = [
-          Query.limit(limit),
-          Query.orderDesc("$createdAt"),
-        ];
-        if (cursor) queries.push(Query.cursorAfter(cursor));
-        const res = await databases.listDocuments(DATABASE_ID, collectionId, queries);
-        allDocs.push(...(res.documents as any[]));
-        if (res.documents.length < limit) break;
-        cursor = res.documents[res.documents.length - 1].$id;
-      }
-
-      if (collectionId === INVENTORY_ITEMS_COLLECTION_ID) {
-        try {
-          const { seedProductNamesFromInventory } = await import("./product-name-cache");
-          seedProductNamesFromInventory(allDocs);
-        } catch {}
-      }
-
-      cache[collectionId] = allDocs;
-      await persistCollection(collectionId);
+      await pullCollection(collectionId, lastInventorySyncTime, fullAll);
     } catch (e) {
       console.warn(`[SyncManager] Inventory pull failed for ${collectionId}:`, e);
       // Non-fatal — keep cached data
@@ -1321,8 +1381,19 @@ async function runInventorySync(): Promise<void> {
     }
   }
   if (failures.length === 0) {
-    lastInventorySyncTime = new Date().toISOString();
+    lastInventorySyncTime = syncStartedAt;
     await AsyncStorage.setItem(LAST_INVENTORY_SYNC_KEY, lastInventorySyncTime);
+    if (fullAll) {
+      lastInventoryFullSyncTime = syncStartedAt;
+      await AsyncStorage.setItem(
+        LAST_INVENTORY_FULL_SYNC_KEY,
+        lastInventoryFullSyncTime
+      );
+    }
+    try {
+      const { seedProductNamesFromInventory } = await import("./product-name-cache");
+      seedProductNamesFromInventory(cache[INVENTORY_ITEMS_COLLECTION_ID] || []);
+    } catch {}
   }
   notifyDataChange();
   if (failures.length > 0) {

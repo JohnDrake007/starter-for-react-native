@@ -45,6 +45,8 @@ jest.mock("../appwrite", () => ({
     limit: (value: number) => `limit:${value}`,
     orderDesc: (value: string) => `orderDesc:${value}`,
     cursorAfter: (value: string) => `cursorAfter:${value}`,
+    greaterThanEqual: (attribute: string, value: string) =>
+      `greaterThanEqual:${attribute}:${value}`,
   },
   DATABASE_ID: "db",
   CUSTOMERS_COLLECTION_ID: "customers",
@@ -261,5 +263,68 @@ describe("sync-manager offline queue", () => {
     await sync.initSync();
 
     expect(sync.getCollection("visits")).toHaveLength(0);
+  });
+
+  test("uses deltas and count probes instead of full scans for routine pulls", async () => {
+    const customer = serverDoc("customers", "customer-1", { name: "A" });
+    const sixMinutesAgo = new Date(Date.now() - 6 * 60 * 1000).toISOString();
+    storageState.set("@fa_customers", JSON.stringify([customer]));
+    storageState.set("@fa_last_sync", sixMinutesAgo);
+    storageState.set("@fa_last_core_full_sync", new Date().toISOString());
+
+    mockDatabases.listDocuments.mockImplementation(
+      async (_db: string, collectionId: string, queries: string[]) => {
+        if (queries.some((query) => query.startsWith("greaterThanEqual:"))) {
+          return { documents: [], total: 0 };
+        }
+        if (queries.includes("limit:1")) {
+          return collectionId === "customers"
+            ? { documents: [customer], total: 1 }
+            : { documents: [], total: 0 };
+        }
+        throw new Error(`Unexpected full scan for ${collectionId}`);
+      }
+    );
+
+    const sync = require("../sync-manager") as typeof import("../sync-manager");
+    await sync.initSync();
+    await sync.syncNow();
+
+    expect(sync.getSyncStatus()).toBe("idle");
+    expect(mockDatabases.listDocuments).toHaveBeenCalledTimes(8);
+    expect(mockDatabases.listDocuments.mock.calls.every(
+      (call) =>
+        call[2].includes("limit:1") ||
+        call[2].some((query: string) => query.startsWith("greaterThanEqual:"))
+    )).toBe(true);
+  });
+
+  test("promotes a collection to a full scan when a delete changes its count", async () => {
+    const visit = serverDoc("visits", "visit-1", { observations: "old" });
+    const sixMinutesAgo = new Date(Date.now() - 6 * 60 * 1000).toISOString();
+    storageState.set("@fa_visits", JSON.stringify([visit]));
+    storageState.set("@fa_last_sync", sixMinutesAgo);
+    storageState.set("@fa_last_core_full_sync", new Date().toISOString());
+
+    mockDatabases.listDocuments.mockImplementation(
+      async (_db: string, _collectionId: string, queries: string[]) => {
+        if (queries.some((query) => query.startsWith("greaterThanEqual:"))) {
+          return { documents: [], total: 0 };
+        }
+        return { documents: [], total: 0 };
+      }
+    );
+
+    const sync = require("../sync-manager") as typeof import("../sync-manager");
+    await sync.initSync();
+    await sync.syncNow();
+
+    expect(sync.getCollection("visits")).toHaveLength(0);
+    expect(mockDatabases.listDocuments.mock.calls.some(
+      (call) =>
+        call[1] === "visits" &&
+        call[2].includes("limit:1000") &&
+        !call[2].some((query: string) => query.startsWith("greaterThanEqual:"))
+    )).toBe(true);
   });
 });
