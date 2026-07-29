@@ -267,12 +267,16 @@ export default function NewVisitScreen() {
       };
       const visitDoc = await createDocument(VISITS_COLLECTION_ID, visitData);
       const visitId = visitDoc.$id;
+      let childSaveFailures = 0;
 
       const recsToSave = encodePrescriptionToRecs(sections);
       for (const rec of recsToSave) {
         try {
           await createDocument(RECOMMENDATIONS_COLLECTION_ID, { visitId, ...rec });
-        } catch (e) { console.warn("Failed to save recommendation:", e); }
+        } catch (e) {
+          childSaveFailures++;
+          console.warn("Failed to save recommendation:", e);
+        }
       }
 
       for (const photo of photos) {
@@ -280,10 +284,16 @@ export default function NewVisitScreen() {
           const fileExt = photo.uri.split(".").pop() || "jpg";
           const mimeType = photo.type || (fileExt === "png" ? "image/png" : "image/jpeg");
           await enqueuePhotoUpload({ localUri: photo.uri, fileName: photo.name || `visit_${visitId}_${Date.now()}.${fileExt}`, mimeType, fileSize: photo.size || 1024, bucketId: STORAGE_BUCKET_ID, visitId, caption: photo.caption });
-        } catch (e) { console.warn("Failed to upload photo:", e); }
+        } catch (e) {
+          childSaveFailures++;
+          console.warn("Failed to upload photo:", e);
+        }
       }
 
-      Alert.alert("Visit Saved", "Visit created successfully!", [{
+      const savedMessage = childSaveFailures > 0
+        ? `The visit was saved, but ${childSaveFailures} attachment or recommendation ${childSaveFailures === 1 ? "item" : "items"} could not be saved. Please review the visit before leaving.`
+        : "Visit created successfully!";
+      Alert.alert(childSaveFailures > 0 ? "Visit Partially Saved" : "Visit Saved", savedMessage, [{
         text: "OK", onPress: () => {
           setCurrentStep(1); setSelectedCustomerId(""); setSelectedCustomerName(""); setObservations("");
           setSections([emptySection("SPRAYING")]); setNextVisitDate(""); setNextVisitTask("");
@@ -365,7 +375,7 @@ export default function NewVisitScreen() {
         }
         setObservations(text);
       }} placeholder="Describe crop conditions, symptoms, field observations..." placeholderTextColor="#9ca3af" multiline numberOfLines={5} textAlignVertical="top" />
-      <Text style={s.obsHint}>Tip: Type "1. " to start auto-numbering. Press Enter to continue.</Text>
+      <Text style={s.obsHint}>Tip: Type &quot;1. &quot; to start auto-numbering. Press Enter to continue.</Text>
 
       <Text style={s.label}>Photos</Text>
       <View style={s.photosRow}>
@@ -508,7 +518,7 @@ export default function NewVisitScreen() {
                               }}
                             >
                               <PlusCircle color="#16a34a" size={14} />
-                              <Text style={s.suggestionAddCustomText}>Use "<Text style={{ fontWeight: "700" }}>{searchState.query}</Text>" as custom</Text>
+                              <Text style={s.suggestionAddCustomText}>Use &quot;<Text style={{ fontWeight: "700" }}>{searchState.query}</Text>&quot; as custom</Text>
                             </TouchableOpacity>
                           )}
                           {suggestions.map((item) => (

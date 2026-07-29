@@ -458,31 +458,25 @@ export default function VisitDetailScreen() {
 
       // 2. Handle deleted photos
       for (const photoId of deletedPhotoIds) {
-        try {
-          await deleteDocument(VISIT_PHOTOS_COLLECTION_ID, photoId);
-        } catch (e) {
-          console.warn("Failed to delete photo:", e);
-        }
+        await deleteDocument(VISIT_PHOTOS_COLLECTION_ID, photoId);
+        setDeletedPhotoIds((prev) => prev.filter((value) => value !== photoId));
       }
 
       // 3. Upload new photos
       for (const photo of newPhotos) {
-        try {
-          const fileExt = photo.uri.split(".").pop() || "jpg";
-          const mimeType = photo.type || (fileExt === "png" ? "image/png" : "image/jpeg");
-          const fileName = photo.name || `visit_${id}_${Date.now()}.${fileExt}`;
-          const fileSize = photo.size || 1024;
-          await enqueuePhotoUpload({
-            localUri: photo.uri,
-            fileName,
-            mimeType,
-            fileSize,
-            bucketId: STORAGE_BUCKET_ID,
-            visitId: id,
-          });
-        } catch (photoErr) {
-          console.warn("Failed to queue photo:", photoErr);
-        }
+        const fileExt = photo.uri.split(".").pop() || "jpg";
+        const mimeType = photo.type || (fileExt === "png" ? "image/png" : "image/jpeg");
+        const fileName = photo.name || `visit_${id}_${Date.now()}.${fileExt}`;
+        const fileSize = photo.size || 1024;
+        await enqueuePhotoUpload({
+          localUri: photo.uri,
+          fileName,
+          mimeType,
+          fileSize,
+          bucketId: STORAGE_BUCKET_ID,
+          visitId: id,
+        });
+        setNewPhotos((prev) => prev.filter((value) => value !== photo));
       }
 
       // 4 & 5. Rebuild recommendations only if the prescription changed.
@@ -503,30 +497,22 @@ export default function VisitDetailScreen() {
       if (recSignature(recommendations) !== recSignature(currentEditRecs)) {
         // Delete every existing recommendation for this visit
         for (const orig of recommendations) {
-          try {
-            await deleteDocument(RECOMMENDATIONS_COLLECTION_ID, orig.$id);
-          } catch (e) {
-            console.warn("Failed to delete recommendation:", e);
-          }
+          await deleteDocument(RECOMMENDATIONS_COLLECTION_ID, orig.$id);
         }
         // Recreate the full set in order
         for (const rec of currentEditRecs) {
-          try {
-            await createDocument(RECOMMENDATIONS_COLLECTION_ID, {
-              visitId: id,
-              itemId: rec.isSectionMarker ? undefined : rec.isCustom ? undefined : rec.itemId,
-              // Always store display name in customItem (denormalized) so
-              // re-open works without inventory cache. Section markers keep §HDR§.
-              customItem: rec.isSectionMarker
-                ? `§HDR§${rec.sectionTitle || ""}§${rec.sectionNote || ""}`
-                : (rec.isCustom ? rec.customItem : rec.name) || rec.name || undefined,
-              dosage: rec.dosage || undefined,
-              quantity: rec.quantity || undefined,
-              notes: rec.notes || undefined,
-            });
-          } catch (e) {
-            console.warn("Failed to create recommendation:", e);
-          }
+          await createDocument(RECOMMENDATIONS_COLLECTION_ID, {
+            visitId: id,
+            itemId: rec.isSectionMarker ? undefined : rec.isCustom ? undefined : rec.itemId,
+            // Always store display name in customItem (denormalized) so
+            // re-open works without inventory cache. Section markers keep §HDR§.
+            customItem: rec.isSectionMarker
+              ? `§HDR§${rec.sectionTitle || ""}§${rec.sectionNote || ""}`
+              : (rec.isCustom ? rec.customItem : rec.name) || rec.name || undefined,
+            dosage: rec.dosage || undefined,
+            quantity: rec.quantity || undefined,
+            notes: rec.notes || undefined,
+          });
         }
       }
 
@@ -535,6 +521,9 @@ export default function VisitDetailScreen() {
       setEditing(false);
       await loadData();
     } catch (e: any) {
+      // Re-read any partial success so retrying cannot duplicate photos or
+      // recommendations that were already committed before the failure.
+      await loadData();
       Alert.alert("Error", e.message || "Failed to save changes");
     } finally {
       setSaving(false);
@@ -554,10 +543,10 @@ export default function VisitDetailScreen() {
             setDeleting(true);
             try {
               for (const rec of recommendations) {
-                try { await deleteDocument(RECOMMENDATIONS_COLLECTION_ID, rec.$id); } catch (e) { console.warn("Failed to delete recommendation:", e); }
+                await deleteDocument(RECOMMENDATIONS_COLLECTION_ID, rec.$id);
               }
               for (const photo of photos) {
-                try { await deleteDocument(VISIT_PHOTOS_COLLECTION_ID, photo.$id); } catch (e) { console.warn("Failed to delete photo:", e); }
+                await deleteDocument(VISIT_PHOTOS_COLLECTION_ID, photo.$id);
               }
               await deleteDocument(VISITS_COLLECTION_ID, id);
               if (router.canGoBack()) router.back();
@@ -847,7 +836,7 @@ export default function VisitDetailScreen() {
                 numberOfLines={5}
                 textAlignVertical="top"
               />
-              <Text style={styles.obsHint}>Tip: Type "1. " to start auto-numbering. Press Enter to continue.</Text>
+              <Text style={styles.obsHint}>Tip: Type &quot;1. &quot; to start auto-numbering. Press Enter to continue.</Text>
             </View>
 
             {/* ── Photos (Edit Mode) ──────────────────────────────────────── */}

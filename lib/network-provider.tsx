@@ -67,6 +67,7 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
   // pull-to-refresh called syncNow() directly. Retry with backoff instead so a
   // one-off transient failure doesn't strand pending changes indefinitely.
   const RETRY_DELAYS_MS = [3000, 8000, 20000, 45000];
+  const MAINTENANCE_RETRY_MS = 5 * 60 * 1000;
 
   const clearRetry = useCallback(() => {
     if (retryTimerRef.current) {
@@ -88,9 +89,15 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
     setLastSync(getLastSyncTime());
     setPendingCount(getPendingCount());
 
-    if (getPendingCount() > 0 && retryCountRef.current < RETRY_DELAYS_MS.length) {
-      const delay = RETRY_DELAYS_MS[retryCountRef.current];
-      retryCountRef.current += 1;
+    const needsRetry = getPendingCount() > 0 || getSyncStatus() === "error";
+    if (needsRetry) {
+      const delay = retryCountRef.current < RETRY_DELAYS_MS.length
+        ? RETRY_DELAYS_MS[retryCountRef.current]
+        : MAINTENANCE_RETRY_MS;
+      retryCountRef.current = Math.min(
+        retryCountRef.current + 1,
+        RETRY_DELAYS_MS.length
+      );
       retryTimerRef.current = setTimeout(() => {
         attemptSync();
       }, delay);
@@ -224,7 +231,7 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
   // ── Manual sync handler ──
   const handleSyncNow = useCallback(async () => {
     try {
-      await syncNow();
+      await syncNow({ forcePull: true });
       setLastSync(getLastSyncTime());
       setPendingCount(getPendingCount());
     } catch {}

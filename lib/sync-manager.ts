@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as FileSystem from "expo-file-system/legacy";
 import { client, databases, storage, Query, DATABASE_ID, CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, VISIT_PHOTOS_COLLECTION_ID, INVENTORY_ITEMS_COLLECTION_ID, INVENTORY_BATCHES_COLLECTION_ID } from "./appwrite";
 // Lazy import to avoid circular deps — imported inline in syncNow
 let _scheduleVisitReminders: (() => Promise<void>) | null = null;
@@ -23,6 +24,9 @@ const STORAGE_KEYS: Record<string, string> = {
 };
 const PENDING_QUEUE_KEY = "@fa_pending_queue";
 const LAST_SYNC_KEY = "@fa_last_sync";
+const LAST_INVENTORY_SYNC_KEY = "@fa_last_inventory_sync";
+const CORE_PULL_MIN_INTERVAL_MS = 5 * 60 * 1000;
+const INVENTORY_PULL_MIN_INTERVAL_MS = 15 * 60 * 1000;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 export type SyncStatus = "idle" | "syncing" | "error" | "offline";
@@ -32,8 +36,15 @@ interface PendingMutation {
   action: "create" | "update" | "delete";
   collectionId: string;
   docId: string;
+  /** Stable Appwrite ID reserved before the first create attempt. */
+  serverDocId?: string;
+  serverCreateAttempted?: boolean;
   data?: Record<string, any>;
   timestamp: number;
+  fileDeleteMeta?: {
+    bucketId: string;
+    fileId: string;
+  };
   /** For photo uploads: local URI, bucket ID, etc. */
   photoMeta?: {
     localUri: string;
@@ -43,6 +54,9 @@ interface PendingMutation {
     bucketId: string;
     visitId: string;
     caption?: string;
+    /** Stable file ID lets a retry recover a file whose response was lost. */
+    fileId?: string;
+    uploadAttempted?: boolean;
   };
 }
 
@@ -66,6 +80,7 @@ const INVENTORY_COLLECTIONS = [
 const cache: Record<string, any[]> = {};
 let pendingQueue: PendingMutation[] = [];
 let lastSyncTime: string | null = null;
+let lastInventorySyncTime: string | null = null;
 let currentStatus: SyncStatus = "idle";
 const listeners: Set<SyncListener> = new Set();
 // Fired whenever the local cache is mutated (pull, push, or a realtime event)
@@ -73,6 +88,9 @@ const listeners: Set<SyncListener> = new Set();
 const dataListeners: Set<() => void> = new Set();
 let initialized = false;
 let realtimeUnsub: (() => void) | null = null;
+let activeSync: Promise<void> | null = null;
+let activeInventorySync: Promise<void> | null = null;
+let reconciliationRequired = false;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -132,6 +150,85 @@ async function persistCollection(collectionId: string) {
 
 async function persistQueue() {
   await AsyncStorage.setItem(PENDING_QUEUE_KEY, JSON.stringify(pendingQueue));
+  // Pending count is displayed in the UI, so queue-only mutations need to
+  // notify status listeners even when connectivity did not change.
+  broadcast(currentStatus);
+}
+
+async function readStoredArray(key: string): Promise<any[]> {
+  const raw = await AsyncStorage.getItem(key);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) throw new Error("Expected an array");
+    return parsed;
+  } catch (e) {
+    // Keep a recoverable copy for support/debugging rather than silently
+    // overwriting the only copy of pending offline work.
+    try {
+      await AsyncStorage.setItem(`${key}_corrupt_backup`, raw);
+    } catch {}
+    console.warn(`[SyncManager] Corrupt local data was backed up for ${key}:`, e);
+    return [];
+  }
+}
+
+function hasPendingMutation(collectionId: string, docId: string): boolean {
+  return pendingQueue.some(
+    (m) => m.collectionId === collectionId &&
+      (m.docId === docId || m.serverDocId === docId)
+  );
+}
+
+/**
+ * Add a mutation while collapsing redundant operations. Besides saving
+ * Appwrite requests, this prevents an older queued update from overwriting a
+ * newer edit that happened after connectivity returned.
+ */
+function enqueueMutation(mutation: PendingMutation): void {
+  if (mutation.action === "update") {
+    const pendingCreate = pendingQueue.find(
+      (m) => m.action === "create" &&
+        !m.photoMeta &&
+        m.collectionId === mutation.collectionId &&
+        m.docId === mutation.docId
+    );
+    if (pendingCreate) {
+      pendingCreate.data = { ...(pendingCreate.data || {}), ...(mutation.data || {}) };
+      pendingCreate.timestamp = mutation.timestamp;
+      return;
+    }
+
+    const pendingUpdate = [...pendingQueue].reverse().find(
+      (m) => m.action === "update" &&
+        m.collectionId === mutation.collectionId &&
+        m.docId === mutation.docId
+    );
+    if (pendingUpdate) {
+      pendingUpdate.data = { ...(pendingUpdate.data || {}), ...(mutation.data || {}) };
+      pendingUpdate.timestamp = mutation.timestamp;
+      return;
+    }
+  }
+
+  if (mutation.action === "delete") {
+    pendingQueue = pendingQueue.filter(
+      (m) => !(m.collectionId === mutation.collectionId &&
+        m.docId === mutation.docId &&
+        m.action === "update")
+    );
+    const pendingDelete = pendingQueue.find(
+      (m) => m.action === "delete" &&
+        m.collectionId === mutation.collectionId &&
+        m.docId === mutation.docId
+    );
+    if (pendingDelete) {
+      pendingDelete.fileDeleteMeta ||= mutation.fileDeleteMeta;
+      return;
+    }
+  }
+
+  pendingQueue.push(mutation);
 }
 
 /**
@@ -174,24 +271,140 @@ function isNetworkOrUnavailableError(e: any): boolean {
 async function createServerDocument(
   collectionId: string,
   data: Record<string, any>,
-  maxRetries = 3
+  documentId = generateDocumentId()
 ): Promise<any> {
-  let lastError: any;
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      return await databases.createDocument(
-        DATABASE_ID,
-        collectionId,
-        generateDocumentId(),
-        data
-      );
-    } catch (e: any) {
-      lastError = e;
-      if (e?.code === 409 && attempt < maxRetries) continue;
-      throw e;
+  try {
+    return await databases.createDocument(
+      DATABASE_ID,
+      collectionId,
+      documentId,
+      data
+    );
+  } catch (e: any) {
+    if (e?.code !== 409) throw e;
+    // A stable ID is reserved before the first request. A 409 on retry means
+    // the original create may have committed even though its response was
+    // lost, so recover that canonical document instead of creating a duplicate.
+    return databases.getDocument(DATABASE_ID, collectionId, documentId);
+  }
+}
+
+async function uploadPhotoFile(
+  meta: NonNullable<PendingMutation["photoMeta"]>
+): Promise<{ $id: string }> {
+  const fileId = meta.fileId || generateDocumentId();
+  meta.fileId = fileId;
+  try {
+    return await storage.createFile(meta.bucketId, fileId, {
+      name: meta.fileName,
+      type: meta.mimeType,
+      size: meta.fileSize,
+      uri: meta.localUri,
+    });
+  } catch (e: any) {
+    if (e?.code !== 409) throw e;
+    return storage.getFile(meta.bucketId, fileId);
+  }
+}
+
+async function stagePhotoForOffline(
+  meta: NonNullable<PendingMutation["photoMeta"]>
+): Promise<NonNullable<PendingMutation["photoMeta"]>> {
+  let resolvedMeta = meta;
+  try {
+    const sourceInfo = await FileSystem.getInfoAsync(meta.localUri);
+    if (sourceInfo.exists && typeof sourceInfo.size === "number" && sourceInfo.size > 0) {
+      resolvedMeta = { ...meta, fileSize: sourceInfo.size };
+    }
+  } catch {}
+
+  const base = FileSystem.documentDirectory;
+  if (!base || resolvedMeta.localUri.startsWith(`${base}pending-photos/`)) return resolvedMeta;
+
+  try {
+    const directory = `${base}pending-photos/`;
+    await FileSystem.makeDirectoryAsync(directory, { intermediates: true });
+    const extension = (resolvedMeta.fileName.split(".").pop() || "jpg").replace(/[^a-z0-9]/gi, "") || "jpg";
+    const destination = `${directory}${generateDocumentId()}.${extension}`;
+    await FileSystem.copyAsync({ from: resolvedMeta.localUri, to: destination });
+    const stagedInfo = await FileSystem.getInfoAsync(destination);
+    return {
+      ...resolvedMeta,
+      localUri: destination,
+      fileSize: stagedInfo.exists && typeof stagedInfo.size === "number"
+        ? stagedInfo.size
+        : resolvedMeta.fileSize,
+    };
+  } catch (e) {
+    // Some platform URIs cannot be copied by the legacy bridge. Keep the
+    // original rather than dropping the photo; upload still proceeds and a
+    // reconnect retry can use it while the picker asset remains available.
+    console.warn("[SyncManager] Could not stage photo in durable storage:", e);
+    return resolvedMeta;
+  }
+}
+
+async function removeStagedPhoto(localUri: string): Promise<void> {
+  const base = FileSystem.documentDirectory;
+  if (!base || !localUri.startsWith(`${base}pending-photos/`)) return;
+  try {
+    await FileSystem.deleteAsync(localUri, { idempotent: true });
+  } catch {}
+}
+
+function resolveReferences(
+  data: Record<string, any> | undefined,
+  idMap: Record<string, string>
+): { data: Record<string, any>; unresolved: string[] } {
+  const resolved = { ...(data || {}) };
+  const unresolved: string[] = [];
+  for (const [key, value] of Object.entries(resolved)) {
+    if (typeof value !== "string" || !value.startsWith("local_")) continue;
+    if (idMap[value]) resolved[key] = idMap[value];
+    else unresolved.push(value);
+  }
+  return { data: resolved, unresolved };
+}
+
+/**
+ * Persist reference remapping immediately after a parent create. This makes
+ * parent/child sync crash-safe: after an app termination, remaining children
+ * no longer depend on an in-memory ID map from the previous run.
+ */
+async function persistResolvedLocalId(
+  localId: string,
+  serverId: string,
+  originMutationId: string
+): Promise<void> {
+  for (const mutation of pendingQueue) {
+    if (mutation.id !== originMutationId && mutation.docId === localId) {
+      mutation.docId = serverId;
+    }
+    if (mutation.data) {
+      for (const [key, value] of Object.entries(mutation.data)) {
+        if (value === localId) mutation.data[key] = serverId;
+      }
+    }
+    if (mutation.photoMeta?.visitId === localId) {
+      mutation.photoMeta.visitId = serverId;
     }
   }
-  throw lastError;
+
+  const changedCollections: string[] = [];
+  for (const [collectionId, docs] of Object.entries(cache)) {
+    let changed = false;
+    for (const doc of docs) {
+      for (const [key, value] of Object.entries(doc)) {
+        if (value === localId) {
+          doc[key] = serverId;
+          changed = true;
+        }
+      }
+    }
+    if (changed) changedCollections.push(collectionId);
+  }
+  await Promise.all(changedCollections.map(persistCollection));
+  await persistQueue();
 }
 
 /** Insert or replace a document in the in-memory cache by its $id (idempotent). */
@@ -213,6 +426,20 @@ function removeFromCache(collectionId: string, docId: string) {
   cache[collectionId] = docs.filter((d: any) => d.$id !== docId);
 }
 
+function getPhotoFileRef(doc: any): PendingMutation["fileDeleteMeta"] | undefined {
+  if (!doc || typeof doc.url !== "string") return undefined;
+  const match = doc.url.match(/\/storage\/buckets\/([^/]+)\/files\/([^/]+)\//);
+  if (!match) return undefined;
+  try {
+    return {
+      bucketId: decodeURIComponent(match[1]),
+      fileId: decodeURIComponent(match[2]),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
@@ -225,16 +452,14 @@ export async function initSync(): Promise<void> {
     // Load core collections from disk
     for (const collectionId of SYNCABLE_COLLECTIONS) {
       const key = STORAGE_KEYS[collectionId];
-      const raw = await AsyncStorage.getItem(key);
-      cache[collectionId] = raw ? JSON.parse(raw) : [];
+      cache[collectionId] = await readStoredArray(key);
     }
     // Also load any previously-cached inventory data
     for (const collectionId of INVENTORY_COLLECTIONS) {
       const key = STORAGE_KEYS[collectionId];
       if (key) {
         try {
-          const raw = await AsyncStorage.getItem(key);
-          cache[collectionId] = raw ? JSON.parse(raw) : [];
+          cache[collectionId] = await readStoredArray(key);
         } catch {}
       }
     }
@@ -245,13 +470,38 @@ export async function initSync(): Promise<void> {
       seedProductNamesFromInventory(cache[INVENTORY_ITEMS_COLLECTION_ID] || []);
     } catch {}
     // Load pending queue
-    const rawQueue = await AsyncStorage.getItem(PENDING_QUEUE_KEY);
-    pendingQueue = rawQueue ? JSON.parse(rawQueue) : [];
+    pendingQueue = (await readStoredArray(PENDING_QUEUE_KEY)).filter(
+      (mutation) =>
+        mutation &&
+        typeof mutation.id === "string" &&
+        ["create", "update", "delete"].includes(mutation.action) &&
+        typeof mutation.collectionId === "string" &&
+        typeof mutation.docId === "string"
+    ) as PendingMutation[];
+    // Recover from a crash between persisting a local placeholder and its
+    // mutation (or between cancelling a mutation and removing its placeholder).
+    // A local document without a matching queued operation can never sync.
+    const queuedLocalIds = new Set(
+      pendingQueue.filter((mutation) => mutation.docId.startsWith("local_"))
+        .map((mutation) => mutation.docId)
+    );
+    for (const collectionId of SYNCABLE_COLLECTIONS) {
+      const docs = cache[collectionId] || [];
+      const reconciled = docs.filter(
+        (doc: any) => !doc.$id?.startsWith("local_") || queuedLocalIds.has(doc.$id)
+      );
+      if (reconciled.length !== docs.length) {
+        cache[collectionId] = reconciled;
+        await persistCollection(collectionId);
+      }
+    }
     // Load last sync time
     lastSyncTime = await AsyncStorage.getItem(LAST_SYNC_KEY);
-    initialized = true;
+    lastInventorySyncTime = await AsyncStorage.getItem(LAST_INVENTORY_SYNC_KEY);
   } catch (e) {
     console.warn("[SyncManager] initSync error:", e);
+  } finally {
+    initialized = true;
   }
 }
 
@@ -279,39 +529,46 @@ export async function createDocument(
   collectionId: string,
   data: Record<string, any>
 ): Promise<any> {
-  try {
-    const created = await createServerDocument(collectionId, data);
-    upsertIntoCache(collectionId, created);
-    await persistCollection(collectionId);
-    return created;
-  } catch (e: any) {
-    if (!isNetworkOrUnavailableError(e)) throw e;
-
-    const localId = generateLocalId();
-    const doc = {
-      ...data,
-      $id: localId,
-      $createdAt: new Date().toISOString(),
-      $updatedAt: new Date().toISOString(),
-      _pendingSync: true,
-    };
-
-    if (!cache[collectionId]) cache[collectionId] = [];
-    cache[collectionId].unshift(doc);
-    await persistCollection(collectionId);
-
-    pendingQueue.push({
-      id: generateLocalId(),
-      action: "create",
-      collectionId,
-      docId: localId,
-      data,
-      timestamp: Date.now(),
-    });
-    await persistQueue();
-
-    return doc;
+  const serverDocId = generateDocumentId();
+  let serverCreateAttempted = false;
+  if (currentStatus !== "offline") {
+    try {
+      serverCreateAttempted = true;
+      const created = await createServerDocument(collectionId, data, serverDocId);
+      upsertIntoCache(collectionId, created);
+      await persistCollection(collectionId);
+      return created;
+    } catch (e: any) {
+      if (!isNetworkOrUnavailableError(e)) throw e;
+    }
   }
+
+  const localId = generateLocalId();
+  const doc = {
+    ...data,
+    $id: localId,
+    $createdAt: new Date().toISOString(),
+    $updatedAt: new Date().toISOString(),
+    _pendingSync: true,
+  };
+
+  if (!cache[collectionId]) cache[collectionId] = [];
+  cache[collectionId].unshift(doc);
+
+  enqueueMutation({
+    id: generateLocalId(),
+    action: "create",
+    collectionId,
+    docId: localId,
+    serverDocId,
+    serverCreateAttempted,
+    data,
+    timestamp: Date.now(),
+  });
+  await persistQueue();
+  await persistCollection(collectionId);
+
+  return doc;
 }
 
 /**
@@ -335,9 +592,8 @@ export async function updateDocument(
     if (idx >= 0) {
       docs[idx] = { ...docs[idx], ...data, $updatedAt: new Date().toISOString(), _pendingSync: true };
       cache[collectionId] = docs;
-      await persistCollection(collectionId);
     }
-    pendingQueue.push({
+    enqueueMutation({
       id: generateLocalId(),
       action: "update",
       collectionId,
@@ -346,6 +602,29 @@ export async function updateDocument(
       timestamp: Date.now(),
     });
     await persistQueue();
+    if (idx >= 0) await persistCollection(collectionId);
+    return docs[idx] || null;
+  }
+
+  // Preserve ordering when an older mutation for this document is still
+  // queued. Sending this edit immediately would let the older retry overwrite
+  // the user's newest values later.
+  if (hasPendingMutation(collectionId, docId) || currentStatus === "offline") {
+    const docs = cache[collectionId] || [];
+    const idx = docs.findIndex((d: any) => d.$id === docId);
+    if (idx >= 0) {
+      docs[idx] = { ...docs[idx], ...data, $updatedAt: new Date().toISOString(), _pendingSync: true };
+    }
+    enqueueMutation({
+      id: generateLocalId(),
+      action: "update",
+      collectionId,
+      docId,
+      data,
+      timestamp: Date.now(),
+    });
+    await persistQueue();
+    if (idx >= 0) await persistCollection(collectionId);
     return docs[idx] || null;
   }
 
@@ -367,9 +646,8 @@ export async function updateDocument(
     if (idx >= 0) {
       docs[idx] = { ...docs[idx], ...data, $updatedAt: new Date().toISOString(), _pendingSync: true };
       cache[collectionId] = docs;
-      await persistCollection(collectionId);
     }
-    pendingQueue.push({
+    enqueueMutation({
       id: generateLocalId(),
       action: "update",
       collectionId,
@@ -378,6 +656,7 @@ export async function updateDocument(
       timestamp: Date.now(),
     });
     await persistQueue();
+    if (idx >= 0) await persistCollection(collectionId);
     return docs[idx] || null;
   }
 }
@@ -398,12 +677,79 @@ export async function deleteDocument(
 ): Promise<void> {
   // Local-only document — nothing exists on the server to delete.
   if (docId.startsWith("local_")) {
-    removeFromCache(collectionId, docId);
-    await persistCollection(collectionId);
+    const queuedCreate = pendingQueue.find(
+      (m) => m.action === "create" &&
+        m.collectionId === collectionId &&
+        m.docId === docId
+    );
+    const queuedPhoto = pendingQueue.find(
+      (m) => m.collectionId === collectionId && m.docId === docId && !!m.photoMeta
+    );
     pendingQueue = pendingQueue.filter(
       (m) => !(m.collectionId === collectionId && m.docId === docId)
     );
+    if (
+      queuedCreate?.serverCreateAttempted &&
+      queuedCreate.serverDocId &&
+      !queuedPhoto
+    ) {
+      // An online create may have committed before its response was lost.
+      // Deleting the placeholder must also idempotently delete that possible
+      // server document, otherwise it can reappear on the next full pull.
+      enqueueMutation({
+        id: generateLocalId(),
+        action: "delete",
+        collectionId,
+        docId: queuedCreate.serverDocId,
+        timestamp: Date.now(),
+      });
+    }
+    if (
+      queuedPhoto?.photoMeta?.uploadAttempted &&
+      queuedPhoto.serverDocId &&
+      queuedPhoto.photoMeta.fileId
+    ) {
+      // The upload/create may have committed before its response was lost.
+      // Queue idempotent cleanup of both resources instead of leaking them.
+      enqueueMutation({
+        id: generateLocalId(),
+        action: "delete",
+        collectionId,
+        docId: queuedPhoto.serverDocId,
+        timestamp: Date.now(),
+        fileDeleteMeta: {
+          bucketId: queuedPhoto.photoMeta.bucketId,
+          fileId: queuedPhoto.photoMeta.fileId,
+        },
+      });
+    }
     await persistQueue();
+    removeFromCache(collectionId, docId);
+    await persistCollection(collectionId);
+    if (queuedPhoto?.photoMeta) {
+      await removeStagedPhoto(queuedPhoto.photoMeta.localUri);
+    }
+    return;
+  }
+
+  const cachedDoc = getDocument(collectionId, docId);
+  const fileDeleteMeta =
+    collectionId === VISIT_PHOTOS_COLLECTION_ID
+      ? getPhotoFileRef(cachedDoc)
+      : undefined;
+
+  if (hasPendingMutation(collectionId, docId) || currentStatus === "offline") {
+    enqueueMutation({
+      id: generateLocalId(),
+      action: "delete",
+      collectionId,
+      docId,
+      timestamp: Date.now(),
+      fileDeleteMeta,
+    });
+    await persistQueue();
+    removeFromCache(collectionId, docId);
+    await persistCollection(collectionId);
     return;
   }
 
@@ -411,19 +757,61 @@ export async function deleteDocument(
     await databases.deleteDocument(DATABASE_ID, collectionId, docId);
     removeFromCache(collectionId, docId);
     await persistCollection(collectionId);
+    if (fileDeleteMeta) {
+      try {
+        await storage.deleteFile(fileDeleteMeta.bucketId, fileDeleteMeta.fileId);
+      } catch (e: any) {
+        if (e?.code !== 404 && isNetworkOrUnavailableError(e)) {
+          enqueueMutation({
+            id: generateLocalId(),
+            action: "delete",
+            collectionId,
+            docId,
+            timestamp: Date.now(),
+            fileDeleteMeta,
+          });
+          await persistQueue();
+        }
+      }
+    }
   } catch (e: any) {
+    if (e?.code === 404) {
+      // The desired document state is already reached (for example after a
+      // lost response or another device deleting it first).
+      removeFromCache(collectionId, docId);
+      await persistCollection(collectionId);
+      if (fileDeleteMeta) {
+        try {
+          await storage.deleteFile(fileDeleteMeta.bucketId, fileDeleteMeta.fileId);
+        } catch (fileError: any) {
+          if (fileError?.code !== 404 && isNetworkOrUnavailableError(fileError)) {
+            enqueueMutation({
+              id: generateLocalId(),
+              action: "delete",
+              collectionId,
+              docId,
+              timestamp: Date.now(),
+              fileDeleteMeta,
+            });
+            await persistQueue();
+          }
+        }
+      }
+      return;
+    }
     if (!isNetworkOrUnavailableError(e)) throw e;
 
-    removeFromCache(collectionId, docId);
-    await persistCollection(collectionId);
-    pendingQueue.push({
+    enqueueMutation({
       id: generateLocalId(),
       action: "delete",
       collectionId,
       docId,
       timestamp: Date.now(),
+      fileDeleteMeta,
     });
     await persistQueue();
+    removeFromCache(collectionId, docId);
+    await persistCollection(collectionId);
   }
 }
 
@@ -438,33 +826,49 @@ export async function deleteDocument(
 export async function enqueuePhotoUpload(meta: PendingMutation["photoMeta"]): Promise<void> {
   if (!meta) return;
 
-  try {
-    const uploaded = await storage.createFile(meta.bucketId, generateDocumentId(), {
-      name: meta.fileName,
-      type: meta.mimeType,
-      size: meta.fileSize,
-      uri: meta.localUri,
-    });
-    const fileUrl = storage.getFileView(meta.bucketId, uploaded.$id).toString();
-    const created = await createServerDocument(VISIT_PHOTOS_COLLECTION_ID, {
-      visitId: meta.visitId,
-      url: fileUrl,
-      caption: meta.caption || undefined,
-    });
-    upsertIntoCache(VISIT_PHOTOS_COLLECTION_ID, created);
-    await persistCollection(VISIT_PHOTOS_COLLECTION_ID);
-    return;
-  } catch (e: any) {
-    if (!isNetworkOrUnavailableError(e)) throw e;
+  const stagedMeta = await stagePhotoForOffline({
+    ...meta,
+    fileId: meta.fileId || generateDocumentId(),
+  });
+  const photoDocumentId = generateDocumentId();
+
+  // A photo that belongs to an offline-created visit must wait for the visit's
+  // real ID. Appwrite accepts arbitrary strings, so attempting this early would
+  // otherwise create a permanently detached photo document.
+  if (!stagedMeta.visitId.startsWith("local_") && currentStatus !== "offline") {
+    stagedMeta.uploadAttempted = true;
+    try {
+      const uploaded = await uploadPhotoFile(stagedMeta);
+      const fileUrl = storage.getFileView(stagedMeta.bucketId, uploaded.$id).toString();
+      const created = await createServerDocument(VISIT_PHOTOS_COLLECTION_ID, {
+        visitId: stagedMeta.visitId,
+        url: fileUrl,
+        caption: stagedMeta.caption || undefined,
+      }, photoDocumentId);
+      upsertIntoCache(VISIT_PHOTOS_COLLECTION_ID, created);
+      await persistCollection(VISIT_PHOTOS_COLLECTION_ID);
+      await removeStagedPhoto(stagedMeta.localUri);
+      return;
+    } catch (e: any) {
+      if (!isNetworkOrUnavailableError(e)) {
+        // Validation/permission errors will not succeed on retry. Remove a file
+        // that was already uploaded so the free-tier storage cannot leak.
+        try {
+          await storage.deleteFile(stagedMeta.bucketId, stagedMeta.fileId!);
+        } catch {}
+        await removeStagedPhoto(stagedMeta.localUri);
+        throw e;
+      }
+    }
   }
 
   // Offline / unavailable — store a local placeholder and queue the upload.
   const localPhotoId = generateLocalId();
   const localPhotoDoc = {
     $id: localPhotoId,
-    visitId: meta.visitId,
-    url: meta.localUri,   // use local URI for offline display
-    caption: meta.caption || undefined,
+    visitId: stagedMeta.visitId,
+    url: stagedMeta.localUri,   // use durable local URI for offline display
+    caption: stagedMeta.caption || undefined,
     $createdAt: new Date().toISOString(),
     $updatedAt: new Date().toISOString(),
     _pendingSync: true,
@@ -472,17 +876,18 @@ export async function enqueuePhotoUpload(meta: PendingMutation["photoMeta"]): Pr
   };
   if (!cache[VISIT_PHOTOS_COLLECTION_ID]) cache[VISIT_PHOTOS_COLLECTION_ID] = [];
   cache[VISIT_PHOTOS_COLLECTION_ID].push(localPhotoDoc);
-  await persistCollection(VISIT_PHOTOS_COLLECTION_ID);
 
-  pendingQueue.push({
+  enqueueMutation({
     id: generateLocalId(),
     action: "create",
     collectionId: VISIT_PHOTOS_COLLECTION_ID,
     docId: localPhotoId,
+    serverDocId: photoDocumentId,
     timestamp: Date.now(),
-    photoMeta: meta,
+    photoMeta: stagedMeta,
   });
   await persistQueue();
+  await persistCollection(VISIT_PHOTOS_COLLECTION_ID);
 }
 
 /** Get current sync status. */
@@ -541,6 +946,9 @@ async function handleRealtimeEvent(res: any): Promise<void> {
   if (isDelete) {
     removeFromCache(collectionId, doc.$id);
   } else {
+    // Do not let a realtime echo or another device overwrite optimistic local
+    // edits which are still waiting in our durable mutation queue.
+    if (hasPendingMutation(collectionId, doc.$id)) return;
     // create or update
     upsertIntoCache(collectionId, doc);
   }
@@ -584,36 +992,64 @@ export function stopRealtime(): void {
  * Full sync: push pending mutations, then pull fresh data from Appwrite.
  * Called automatically on connectivity change and manually via "Sync Now".
  */
-export async function syncNow(): Promise<void> {
-  if (currentStatus === "syncing") return;
+export async function syncNow(options: { forcePull?: boolean } = {}): Promise<void> {
+  if (activeSync) return activeSync;
+  activeSync = runSync(options).finally(() => {
+    activeSync = null;
+  });
+  return activeSync;
+}
+
+async function runSync(options: { forcePull?: boolean }): Promise<void> {
   broadcast("syncing");
 
   try {
+    const hadPending = pendingQueue.length > 0;
+
     // ── 1. Push pending mutations ──
-    await pushPendingQueue();
+    const failedCount = await pushPendingQueue();
+    if (failedCount > 0) {
+      throw new Error(`${failedCount} change${failedCount === 1 ? "" : "s"} still waiting to sync`);
+    }
 
-    // ── 2. Pull fresh data from all collections ──
-    await pullAllCollections();
+    // Foreground churn can otherwise perform four full collection reads every
+    // few seconds. Realtime covers live changes while the app is active; this
+    // bounded interval still performs regular full delete reconciliation.
+    const lastPullAge = lastSyncTime
+      ? Date.now() - new Date(lastSyncTime).getTime()
+      : Number.POSITIVE_INFINITY;
+    const shouldPull =
+      options.forcePull === true ||
+      hadPending ||
+      reconciliationRequired ||
+      lastPullAge >= CORE_PULL_MIN_INTERVAL_MS;
 
-    // ── 3. Update last sync time ──
-    lastSyncTime = new Date().toISOString();
-    await AsyncStorage.setItem(LAST_SYNC_KEY, lastSyncTime);
+    if (shouldPull) {
+      // ── 2. Pull fresh data from all collections ──
+      await pullAllCollections();
+      reconciliationRequired = false;
 
-    // ── 4. Re-schedule device notifications to reflect fresh data ──
-    refreshNotifications();
+      // ── 3. Update last successful reconciliation time ──
+      lastSyncTime = new Date().toISOString();
+      await AsyncStorage.setItem(LAST_SYNC_KEY, lastSyncTime);
 
-    // ── 5. Refresh any visible screens with the freshly synced cache ──
-    notifyDataChange();
+      // ── 4. Re-schedule device notifications to reflect fresh data ──
+      refreshNotifications();
 
-    broadcast("idle", "Sync complete");
+      // ── 5. Refresh visible screens with the freshly synced cache ──
+      notifyDataChange();
+    }
+
+    broadcast("idle", shouldPull ? "Sync complete" : "Already up to date");
   } catch (e: any) {
+    reconciliationRequired = true;
     console.warn("[SyncManager] syncNow error:", e);
     broadcast("error", e.message || "Sync failed");
   }
 }
 
 /** Push all pending mutations to Appwrite. */
-async function pushPendingQueue(): Promise<void> {
+async function pushPendingQueue(): Promise<number> {
   // Create a copy so we can remove processed items
   const queue = [...pendingQueue];
   const failed: PendingMutation[] = [];
@@ -630,17 +1066,26 @@ async function pushPendingQueue(): Promise<void> {
 
       switch (mutation.action) {
         case "create": {
-          const serverData = { ...mutation.data };
-          // Resolve local ID references in data fields
-          if (serverData) {
-            for (const [key, value] of Object.entries(serverData)) {
-              if (typeof value === "string" && value.startsWith("local_") && idMap[value]) {
-                serverData[key] = idMap[value];
-              }
-            }
+          const { data: serverData, unresolved } = resolveReferences(mutation.data, idMap);
+          if (unresolved.length > 0) {
+            throw new Error(`Waiting for parent ${unresolved[0]}`);
           }
 
-          const created = await createServerDocument(mutation.collectionId, serverData!);
+          // Old queue entries are migrated lazily. Persist the stable ID before
+          // the request so an app termination after a server commit is safe.
+          if (!mutation.serverDocId) {
+            mutation.serverDocId = generateDocumentId();
+            await persistQueue();
+          }
+          if (!mutation.serverCreateAttempted) {
+            mutation.serverCreateAttempted = true;
+            await persistQueue();
+          }
+          const created = await createServerDocument(
+            mutation.collectionId,
+            serverData,
+            mutation.serverDocId
+          );
           // Map old local ID → new server ID
           idMap[mutation.docId] = created.$id;
 
@@ -648,20 +1093,21 @@ async function pushPendingQueue(): Promise<void> {
           removeFromCache(mutation.collectionId, mutation.docId);
           upsertIntoCache(mutation.collectionId, created);
           await persistCollection(mutation.collectionId);
+          await persistResolvedLocalId(mutation.docId, created.$id, mutation.id);
           break;
         }
         case "update": {
-          // Skip if the document was a local-only doc that got a new server ID
           const resolvedId = idMap[mutation.docId] || mutation.docId;
           if (resolvedId.startsWith("local_")) {
-            // Can't update a doc that doesn't exist on server yet; skip
-            continue;
+            throw new Error(`Waiting for document ${resolvedId}`);
           }
+          const { data: resolvedData, unresolved } = resolveReferences(mutation.data, idMap);
+          if (unresolved.length > 0) throw new Error(`Waiting for parent ${unresolved[0]}`);
           const updated = await databases.updateDocument(
             DATABASE_ID,
             mutation.collectionId,
             resolvedId,
-            mutation.data!
+            resolvedData
           );
           // Keep local cache in sync with the server response
           upsertIntoCache(mutation.collectionId, updated);
@@ -670,12 +1116,30 @@ async function pushPendingQueue(): Promise<void> {
         }
         case "delete": {
           const resolvedId = idMap[mutation.docId] || mutation.docId;
-          if (resolvedId.startsWith("local_")) continue;
-          await databases.deleteDocument(
-            DATABASE_ID,
-            mutation.collectionId,
-            resolvedId
-          );
+          if (resolvedId.startsWith("local_")) {
+            throw new Error(`Waiting for document ${resolvedId}`);
+          }
+          try {
+            await databases.deleteDocument(
+              DATABASE_ID,
+              mutation.collectionId,
+              resolvedId
+            );
+          } catch (e: any) {
+            // A lost delete response is safely idempotent: 404 means the desired
+            // final state has already been reached.
+            if (e?.code !== 404) throw e;
+          }
+          if (mutation.fileDeleteMeta) {
+            try {
+              await storage.deleteFile(
+                mutation.fileDeleteMeta.bucketId,
+                mutation.fileDeleteMeta.fileId
+              );
+            } catch (e: any) {
+              if (e?.code !== 404) throw e;
+            }
+          }
           removeFromCache(mutation.collectionId, resolvedId);
           await persistCollection(mutation.collectionId);
           break;
@@ -689,6 +1153,7 @@ async function pushPendingQueue(): Promise<void> {
 
   pendingQueue = failed;
   await persistQueue();
+  return failed.length;
 }
 
 /** Handle a queued photo upload. */
@@ -698,15 +1163,26 @@ async function pushPhotoUpload(
 ): Promise<void> {
   const meta = mutation.photoMeta!;
   const resolvedVisitId = idMap[meta.visitId] || meta.visitId;
+  if (resolvedVisitId.startsWith("local_")) {
+    throw new Error(`Waiting for visit ${resolvedVisitId}`);
+  }
 
-  // Upload file to storage
-  const uploaded = await storage.createFile(meta.bucketId, generateDocumentId(), {
-    name: meta.fileName,
-    type: meta.mimeType,
-    size: meta.fileSize,
-    uri: meta.localUri,
-  });
+  if (!mutation.serverDocId) {
+    mutation.serverDocId = generateDocumentId();
+    await persistQueue();
+  }
+  if (!meta.fileId) {
+    meta.fileId = generateDocumentId();
+    await persistQueue();
+  }
+  if (!meta.uploadAttempted) {
+    meta.uploadAttempted = true;
+    await persistQueue();
+  }
 
+  // Both the file and photo document use stable IDs. Retrying after an
+  // ambiguous network failure recovers the existing resources on 409.
+  const uploaded = await uploadPhotoFile(meta);
   const fileUrl = storage.getFileView(meta.bucketId, uploaded.$id).toString();
 
   // Create photo document
@@ -714,12 +1190,13 @@ async function pushPhotoUpload(
     visitId: resolvedVisitId,
     url: fileUrl,
     caption: meta.caption || undefined,
-  });
+  }, mutation.serverDocId);
 
   // Replace the local placeholder with the synced server document
   removeFromCache(VISIT_PHOTOS_COLLECTION_ID, mutation.docId);
   upsertIntoCache(VISIT_PHOTOS_COLLECTION_ID, created);
   await persistCollection(VISIT_PHOTOS_COLLECTION_ID);
+  await removeStagedPhoto(meta.localUri);
 }
 
 /**
@@ -739,22 +1216,24 @@ async function pushPhotoUpload(
  * repeated sync attempts. Local-only pending documents are always preserved.
  */
 async function pullAllCollections(): Promise<void> {
+  const failures: string[] = [];
   for (const collectionId of SYNCABLE_COLLECTIONS) {
     try {
       // Paginated full pull — fetch every document currently on the server.
       const allServerDocs: any[] = [];
-      let offset = 0;
+      let cursor: string | null = null;
       const limit = 1000;
 
       while (true) {
-        const res = await databases.listDocuments(DATABASE_ID, collectionId, [
+        const queries = [
           Query.limit(limit),
-          Query.offset(offset),
           Query.orderDesc("$createdAt"),
-        ]);
+        ];
+        if (cursor) queries.push(Query.cursorAfter(cursor));
+        const res = await databases.listDocuments(DATABASE_ID, collectionId, queries);
         allServerDocs.push(...(res.documents as any[]));
         if (res.documents.length < limit) break;
-        offset += limit;
+        cursor = res.documents[res.documents.length - 1].$id;
       }
 
       // Reconcile deletes — remove any server-id docs from the local cache
@@ -774,7 +1253,11 @@ async function pullAllCollections(): Promise<void> {
     } catch (e) {
       console.warn(`[SyncManager] Pull failed for ${collectionId}:`, e);
       // Keep existing local data on failure — offline resilience
+      failures.push(collectionId);
     }
+  }
+  if (failures.length > 0) {
+    throw new Error(`Could not refresh ${failures.join(", ")}`);
   }
 }
 
@@ -782,7 +1265,20 @@ async function pullAllCollections(): Promise<void> {
  * Sync inventory_items and inventory_batches on-demand.
  * Called from product screens — does NOT block the main syncNow cycle.
  */
-export async function syncInventoryCollections(): Promise<void> {
+export async function syncInventoryCollections(force = false): Promise<void> {
+  if (activeInventorySync) return activeInventorySync;
+  const lastPullAge = lastInventorySyncTime
+    ? Date.now() - new Date(lastInventorySyncTime).getTime()
+    : Number.POSITIVE_INFINITY;
+  if (!force && lastPullAge < INVENTORY_PULL_MIN_INTERVAL_MS) return;
+
+  activeInventorySync = runInventorySync().finally(() => {
+    activeInventorySync = null;
+  });
+  return activeInventorySync;
+}
+
+async function runInventorySync(): Promise<void> {
   // Snapshot names from whatever is currently cached BEFORE replace, so a
   // Tally re-import (new Appwrite $ids) doesn't break old recommendation links.
   try {
@@ -790,21 +1286,23 @@ export async function syncInventoryCollections(): Promise<void> {
     seedProductNamesFromInventory(cache[INVENTORY_ITEMS_COLLECTION_ID] || []);
   } catch {}
 
+  const failures: string[] = [];
   for (const collectionId of INVENTORY_COLLECTIONS) {
     try {
       const allDocs: any[] = [];
-      let offset = 0;
+      let cursor: string | null = null;
       const limit = 1000;
 
       while (true) {
-        const res = await databases.listDocuments(DATABASE_ID, collectionId, [
+        const queries = [
           Query.limit(limit),
-          Query.offset(offset),
           Query.orderDesc("$createdAt"),
-        ]);
+        ];
+        if (cursor) queries.push(Query.cursorAfter(cursor));
+        const res = await databases.listDocuments(DATABASE_ID, collectionId, queries);
         allDocs.push(...(res.documents as any[]));
         if (res.documents.length < limit) break;
-        offset += limit;
+        cursor = res.documents[res.documents.length - 1].$id;
       }
 
       if (collectionId === INVENTORY_ITEMS_COLLECTION_ID) {
@@ -819,9 +1317,17 @@ export async function syncInventoryCollections(): Promise<void> {
     } catch (e) {
       console.warn(`[SyncManager] Inventory pull failed for ${collectionId}:`, e);
       // Non-fatal — keep cached data
+      failures.push(collectionId);
     }
   }
+  if (failures.length === 0) {
+    lastInventorySyncTime = new Date().toISOString();
+    await AsyncStorage.setItem(LAST_INVENTORY_SYNC_KEY, lastInventorySyncTime);
+  }
   notifyDataChange();
+  if (failures.length > 0) {
+    throw new Error(`Could not refresh ${failures.join(", ")}`);
+  }
 }
 
 /**
