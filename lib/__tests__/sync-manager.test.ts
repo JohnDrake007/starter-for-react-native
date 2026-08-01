@@ -86,6 +86,42 @@ describe("sync-manager offline queue", () => {
     );
   });
 
+  test("remaps an offline-created customer before syncing its visit", async () => {
+    const sync = require("../sync-manager") as typeof import("../sync-manager");
+    await sync.initSync();
+    sync.setOffline();
+
+    const customer = await sync.createDocument("customers", {
+      guid: "app_customer_1",
+      name: "Asha",
+      customer_name: "Asha",
+      phone: "123",
+    });
+    await sync.createDocument("visits", {
+      customerId: customer.$id,
+      visitDate: new Date().toISOString(),
+    });
+
+    mockDatabases.createDocument.mockImplementation(
+      async (_db: string, collectionId: string, documentId: string, data: Record<string, any>) =>
+        serverDoc(collectionId, documentId, data)
+    );
+    sync.setOnline();
+    await sync.syncNow({ forcePull: true });
+
+    const customerCall = mockDatabases.createDocument.mock.calls.find(
+      (call) => call[1] === "customers"
+    );
+    const visitCall = mockDatabases.createDocument.mock.calls.find(
+      (call) => call[1] === "visits"
+    );
+
+    expect(customerCall).toBeDefined();
+    expect(visitCall?.[3].customerId).toBe(customerCall?.[2]);
+    expect(visitCall?.[3].customerId).not.toMatch(/^local_/);
+    expect(sync.getPendingCount()).toBe(0);
+  });
+
   test("defers children until an offline-created visit has a server ID", async () => {
     const sync = require("../sync-manager") as typeof import("../sync-manager");
     await sync.initSync();

@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Alert, Platform } from "react-native";
+import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Alert } from "react-native";
 import { useState } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
@@ -7,6 +7,7 @@ import { ArrowLeft, UserPlus, Phone, MapPin, Sprout, Check } from "@/components/
 import { CUSTOMERS_COLLECTION_ID } from "@/lib/appwrite";
 import { createDocument } from "@/lib/sync-manager";
 import { generateAppGuid } from "@/lib/inventory-utils";
+import { buildCustomerWriteData } from "@/lib/customer-utils";
 
 const cropOptions = ["Cardamom", "Pepper", "Coffee", "Tea", "Rubber", "Coconut", "Rice", "Other"];
 
@@ -60,21 +61,20 @@ export default function AddCustomerScreen() {
     if (!phone.trim()) { Alert.alert("Required", "Please enter the phone number"); return; }
     setSubmitting(true);
     try {
-      await createDocument(CUSTOMERS_COLLECTION_ID, {
-        // The customers collection has a UNIQUE index on `guid` (default "").
-        // Without a per-document guid, the 2nd app-created customer collides on
-        // the empty string → 409. Use an app-prefixed guid (matches products)
-        // so it is unique and never overwritten by a Tally sync.
+      await createDocument(CUSTOMERS_COLLECTION_ID, buildCustomerWriteData({
+        // The customers collection has a UNIQUE index on `guid`. Use an
+        // app-prefixed value so app-created customers remain distinct from
+        // Tally-managed records.
         guid: generateAppGuid(),
         name: name.trim(),
         phone: phone.trim(),
-        address: address.trim() || undefined,
-        cropType: cropType || undefined,
-        contact_person: contactName.trim() || undefined,
-        mobile: contactPhone.trim() || undefined,
-        latitude: latitude || undefined,
-        longitude: longitude || undefined,
-      });
+        address,
+        cropType,
+        contactName,
+        contactPhone,
+        latitude,
+        longitude,
+      }));
       Alert.alert("Success", "Farmer added successfully!", [
         { text: "OK", onPress: () => router.back() },
       ]);

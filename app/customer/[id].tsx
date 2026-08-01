@@ -8,6 +8,7 @@ import { getCollection, getDocument, updateDocument } from "@/lib/sync-manager";
 import { useNetwork } from "@/lib/network-provider";
 import { buildItemLookup, resolveRecProductName } from "@/lib/inventory-utils";
 import { lookupCachedProductName } from "@/lib/product-name-cache";
+import { buildCustomerWriteData } from "@/lib/customer-utils";
 
 interface VisitItem {
   $id: string;
@@ -149,11 +150,14 @@ export default function CustomerDetailScreen() {
     if (!editPhone.trim()) { Alert.alert("Required", "Phone is required"); return; }
     setSaving(true);
     try {
-      const updateData: any = { name: editName.trim(), phone: editPhone.trim() };
-      updateData.address = editAddress.trim() || undefined;
-      updateData.cropType = editCropType || undefined;
-      updateData.contact_person = editContactName.trim() || undefined;
-      updateData.mobile = editContactPhone.trim() || undefined;
+      const updateData = buildCustomerWriteData({
+        name: editName,
+        phone: editPhone,
+        address: editAddress,
+        cropType: editCropType,
+        contactName: editContactName,
+        contactPhone: editContactPhone,
+      });
       await updateDocument(CUSTOMERS_COLLECTION_ID, id, updateData);
       setEditing(false);
       await loadData();
