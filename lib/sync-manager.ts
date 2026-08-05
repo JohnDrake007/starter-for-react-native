@@ -3,14 +3,40 @@ import * as FileSystem from "expo-file-system/legacy";
 import { client, databases, storage, Query, DATABASE_ID, CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, VISIT_PHOTOS_COLLECTION_ID, INVENTORY_ITEMS_COLLECTION_ID, INVENTORY_BATCHES_COLLECTION_ID } from "./appwrite";
 // Lazy import to avoid circular deps — imported inline in syncNow
 let _scheduleVisitReminders: (() => Promise<void>) | null = null;
-async function refreshNotifications() {
-  try {
-    if (!_scheduleVisitReminders) {
-      const mod = await import("./notification-manager");
-      _scheduleVisitReminders = mod.scheduleVisitReminders;
-    }
-    await _scheduleVisitReminders();
-  } catch {}
+let notificationRefreshActive: Promise<void> | null = null;
+let notificationRefreshQueued = false;
+
+function refreshNotifications(): Promise<void> {
+  notificationRefreshQueued = true;
+  if (!notificationRefreshActive) {
+    // Serialize refreshes so a local write and its realtime echo cannot both
+    // cancel/recreate the same device notifications concurrently. If data
+    // changes while a refresh is running, perform one more pass afterward.
+    notificationRefreshActive = (async () => {
+      while (notificationRefreshQueued) {
+        notificationRefreshQueued = false;
+        try {
+          if (!_scheduleVisitReminders) {
+            const mod = await import("./notification-manager");
+            _scheduleVisitReminders = mod.scheduleVisitReminders;
+          }
+          await _scheduleVisitReminders();
+        } catch {}
+      }
+    })().finally(() => {
+      notificationRefreshActive = null;
+    });
+  }
+  return notificationRefreshActive;
+}
+
+async function finalizeCollectionMutation(collectionId: string): Promise<void> {
+  // Screens should immediately reflect optimistic offline writes as well as
+  // online writes; they should not have to wait for navigation or realtime.
+  notifyDataChange();
+  if (collectionId === VISITS_COLLECTION_ID) {
+    await refreshNotifications();
+  }
 }
 
 // ── Storage Keys ──────────────────────────────────────────────────────────────
@@ -544,6 +570,7 @@ export async function createDocument(
       const created = await createServerDocument(collectionId, data, serverDocId);
       upsertIntoCache(collectionId, created);
       await persistCollection(collectionId);
+      await finalizeCollectionMutation(collectionId);
       return created;
     } catch (e: any) {
       if (!isNetworkOrUnavailableError(e)) throw e;
@@ -574,6 +601,7 @@ export async function createDocument(
   });
   await persistQueue();
   await persistCollection(collectionId);
+  await finalizeCollectionMutation(collectionId);
 
   return doc;
 }
@@ -610,6 +638,7 @@ export async function updateDocument(
     });
     await persistQueue();
     if (idx >= 0) await persistCollection(collectionId);
+    await finalizeCollectionMutation(collectionId);
     return docs[idx] || null;
   }
 
@@ -632,6 +661,7 @@ export async function updateDocument(
     });
     await persistQueue();
     if (idx >= 0) await persistCollection(collectionId);
+    await finalizeCollectionMutation(collectionId);
     return docs[idx] || null;
   }
 
@@ -644,6 +674,7 @@ export async function updateDocument(
     );
     upsertIntoCache(collectionId, updated);
     await persistCollection(collectionId);
+    await finalizeCollectionMutation(collectionId);
     return updated;
   } catch (e: any) {
     if (!isNetworkOrUnavailableError(e)) throw e;
@@ -664,6 +695,7 @@ export async function updateDocument(
     });
     await persistQueue();
     if (idx >= 0) await persistCollection(collectionId);
+    await finalizeCollectionMutation(collectionId);
     return docs[idx] || null;
   }
 }
@@ -736,6 +768,7 @@ export async function deleteDocument(
     if (queuedPhoto?.photoMeta) {
       await removeStagedPhoto(queuedPhoto.photoMeta.localUri);
     }
+    await finalizeCollectionMutation(collectionId);
     return;
   }
 
@@ -757,6 +790,7 @@ export async function deleteDocument(
     await persistQueue();
     removeFromCache(collectionId, docId);
     await persistCollection(collectionId);
+    await finalizeCollectionMutation(collectionId);
     return;
   }
 
@@ -781,6 +815,7 @@ export async function deleteDocument(
         }
       }
     }
+    await finalizeCollectionMutation(collectionId);
   } catch (e: any) {
     if (e?.code === 404) {
       // The desired document state is already reached (for example after a
@@ -804,6 +839,7 @@ export async function deleteDocument(
           }
         }
       }
+      await finalizeCollectionMutation(collectionId);
       return;
     }
     if (!isNetworkOrUnavailableError(e)) throw e;
@@ -819,6 +855,7 @@ export async function deleteDocument(
     await persistQueue();
     removeFromCache(collectionId, docId);
     await persistCollection(collectionId);
+    await finalizeCollectionMutation(collectionId);
   }
 }
 
@@ -960,7 +997,7 @@ async function handleRealtimeEvent(res: any): Promise<void> {
     upsertIntoCache(collectionId, doc);
   }
   await persistCollection(collectionId);
-  notifyDataChange();
+  await finalizeCollectionMutation(collectionId);
 }
 
 /**
@@ -996,10 +1033,13 @@ export function stopRealtime(): void {
 // ── Sync Execution ────────────────────────────────────────────────────────────
 
 /**
- * Full sync: push pending mutations, then pull fresh data from Appwrite.
- * Called automatically on connectivity change and manually via "Sync Now".
+ * Push pending mutations, then pull fresh data from Appwrite when due.
+ * `ensurePull` bypasses the short freshness window but keeps the pull
+ * incremental; `forcePull` performs a complete reconciliation.
  */
-export async function syncNow(options: { forcePull?: boolean } = {}): Promise<void> {
+export async function syncNow(
+  options: { forcePull?: boolean; ensurePull?: boolean } = {}
+): Promise<void> {
   if (activeSync) return activeSync;
   activeSync = runSync(options).finally(() => {
     activeSync = null;
@@ -1007,7 +1047,7 @@ export async function syncNow(options: { forcePull?: boolean } = {}): Promise<vo
   return activeSync;
 }
 
-async function runSync(options: { forcePull?: boolean }): Promise<void> {
+async function runSync(options: { forcePull?: boolean; ensurePull?: boolean }): Promise<void> {
   broadcast("syncing");
   // Persist the cycle start (not the finish) as the incremental cursor. A
   // document changed while this cycle is running may then be read twice on the
@@ -1023,14 +1063,15 @@ async function runSync(options: { forcePull?: boolean }): Promise<void> {
       throw new Error(`${failedCount} change${failedCount === 1 ? "" : "s"} still waiting to sync`);
     }
 
-    // Foreground churn can otherwise perform four full collection reads every
-    // few seconds. Realtime covers live changes while the app is active; this
-    // bounded interval still performs regular full delete reconciliation.
+    // Routine calls honor a short freshness window. Lifecycle reconciliation
+    // can bypass that window with `ensurePull` while still using cheap delta
+    // reads; only `forcePull` or the weekly safety pass performs full scans.
     const lastPullAge = lastSyncTime
       ? Date.now() - new Date(lastSyncTime).getTime()
       : Number.POSITIVE_INFINITY;
     const shouldPull =
       options.forcePull === true ||
+      options.ensurePull === true ||
       hadPending ||
       reconciliationRequired ||
       lastPullAge >= CORE_PULL_MIN_INTERVAL_MS;
@@ -1045,7 +1086,7 @@ async function runSync(options: { forcePull?: boolean }): Promise<void> {
       await AsyncStorage.setItem(LAST_SYNC_KEY, lastSyncTime);
 
       // ── 4. Re-schedule device notifications to reflect fresh data ──
-      refreshNotifications();
+      await refreshNotifications();
 
       // ── 5. Refresh visible screens with the freshly synced cache ──
       notifyDataChange();

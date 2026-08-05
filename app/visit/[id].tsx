@@ -445,9 +445,16 @@ export default function VisitDetailScreen() {
       if (editNextVisitDate) {
         updateData.nextVisitDate = new Date(editNextVisitDate).toISOString();
       } else if (visitData.nextVisitDate) {
-        updateData.nextVisitDate = undefined;
+        // `undefined` is omitted by JSON.stringify, so it leaves the old
+        // Appwrite value untouched. Optional attributes must be cleared with
+        // an explicit null so a deleted reminder cannot return after sync.
+        updateData.nextVisitDate = null;
       }
-      if (editNextVisitTask !== (visitData.nextVisitTask || "")) updateData.nextVisitTask = editNextVisitTask || undefined;
+      if (!editNextVisitDate && visitData.nextVisitTask) {
+        updateData.nextVisitTask = null;
+      } else if (editNextVisitTask !== (visitData.nextVisitTask || "")) {
+        updateData.nextVisitTask = editNextVisitTask || null;
+      }
       if (editLatitude !== null && editLatitude !== visitData.latitude) updateData.latitude = editLatitude;
       if (editLongitude !== null && editLongitude !== visitData.longitude) updateData.longitude = editLongitude;
       if (editLocationName !== (visitData.locationName || "")) updateData.locationName = editLocationName || undefined;

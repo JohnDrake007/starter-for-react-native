@@ -77,14 +77,14 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
     retryCountRef.current = 0;
   }, []);
 
-  const attemptSync = useCallback(async () => {
+  const attemptSync = useCallback(async (ensurePull = false) => {
     if (retryTimerRef.current) {
       clearTimeout(retryTimerRef.current);
       retryTimerRef.current = null;
     }
 
     try {
-      await syncNow();
+      await syncNow({ ensurePull });
     } catch {}
     setLastSync(getLastSyncTime());
     setPendingCount(getPendingCount());
@@ -99,7 +99,9 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
         RETRY_DELAYS_MS.length
       );
       retryTimerRef.current = setTimeout(() => {
-        attemptSync();
+        // A retry after reconnect/startup must still reconcile changes that
+        // other users made while this device was disconnected.
+        attemptSync(ensurePull);
       }, delay);
     } else {
       retryCountRef.current = 0;
@@ -124,12 +126,16 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
       setIsOnline(online);
 
       if (online) {
-        // Do an initial sync to pull latest data (retried on transient failure).
-        await attemptSync();
+        // Reconcile even when the cached sync timestamp is recent. Realtime
+        // does not replay events that arrived while the app was not running.
+        await attemptSync(true);
         if (!mounted) return;
         // Subscribe to realtime so changes from other devices land live.
         startRealtime();
       } else {
+        // Remember that the next online event must push the durable queue and
+        // reconcile server changes, even if NetInfo's initial event is delayed.
+        wasOfflineRef.current = true;
         setOffline();
       }
     }
@@ -169,7 +175,9 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
           setOnline();
           // Auto-sync when transitioning from offline → online
           if (wasOfflineRef.current) {
-            await attemptSync();
+            // Pull the delta missed while offline after queued writes are
+            // pushed, making those reminders visible across every device.
+            await attemptSync(true);
           }
           wasOfflineRef.current = false;
           // (Re)subscribe to realtime now that we're back online.
@@ -217,7 +225,8 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
         wasOfflineRef.current = false;
         // Re-arm realtime only if it isn't already running (no-op if active).
         startRealtime();
-        await attemptSync();
+        // Reconcile events that may have been missed while JS was suspended.
+        await attemptSync(true);
       } else {
         wasOfflineRef.current = true;
         setOffline();

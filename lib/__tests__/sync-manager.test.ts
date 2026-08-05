@@ -24,6 +24,14 @@ const mockStorage = {
   })),
 };
 
+let mockRealtimeCallback: ((response: any) => void) | null = null;
+const mockClient = {
+  subscribe: jest.fn((_channels: string[], callback: (response: any) => void) => {
+    mockRealtimeCallback = callback;
+    return jest.fn();
+  }),
+};
+
 jest.mock("@react-native-async-storage/async-storage", () => ({
   __esModule: true,
   default: mockAsyncStorage,
@@ -38,7 +46,7 @@ jest.mock("expo-file-system/legacy", () => ({
 }));
 
 jest.mock("../appwrite", () => ({
-  client: { subscribe: jest.fn(() => jest.fn()) },
+  client: mockClient,
   databases: mockDatabases,
   storage: mockStorage,
   Query: {
@@ -80,6 +88,7 @@ describe("sync-manager offline queue", () => {
     jest.resetModules();
     jest.clearAllMocks();
     storageState.clear();
+    mockRealtimeCallback = null;
     mockDatabases.listDocuments.mockResolvedValue({ documents: [] });
     mockStorage.createFile.mockImplementation(
       async (_bucketId: string, fileId: string) => ({ $id: fileId })
@@ -220,7 +229,10 @@ describe("sync-manager offline queue", () => {
 
     const visit = await sync.createDocument("visits", { observations: "first" });
     await sync.updateDocument("visits", visit.$id, { observations: "second" });
-    await sync.updateDocument("visits", visit.$id, { nextVisitTask: "call" });
+    await sync.updateDocument("visits", visit.$id, {
+      nextVisitDate: "2026-08-18T00:00:00.000Z",
+      nextVisitTask: "call",
+    });
 
     expect(sync.getPendingCount()).toBe(1);
 
@@ -232,8 +244,146 @@ describe("sync-manager offline queue", () => {
     await sync.syncNow({ forcePull: true });
 
     const payload = mockDatabases.createDocument.mock.calls[0][3];
-    expect(payload).toMatchObject({ observations: "second", nextVisitTask: "call" });
+    expect(payload).toMatchObject({
+      observations: "second",
+      nextVisitDate: "2026-08-18T00:00:00.000Z",
+      nextVisitTask: "call",
+    });
     expect(mockDatabases.createDocument).toHaveBeenCalledTimes(1);
+  });
+
+  test("persists an offline reminder update across restart and publishes it on reconnect", async () => {
+    const previousDate = "2026-08-10T00:00:00.000Z";
+    const updatedDate = "2026-08-18T00:00:00.000Z";
+    const recentSync = new Date().toISOString();
+    const originalVisit = serverDoc("visits", "visit-1", {
+      customerId: "customer-1",
+      nextVisitDate: previousDate,
+      nextVisitTask: "Old task",
+    });
+    storageState.set("@fa_visits", JSON.stringify([originalVisit]));
+    storageState.set("@fa_last_sync", recentSync);
+    storageState.set("@fa_last_core_full_sync", recentSync);
+
+    let sync = require("../sync-manager") as typeof import("../sync-manager");
+    await sync.initSync();
+    sync.setOffline();
+    const onLocalChange = jest.fn();
+    sync.addDataChangeListener(onLocalChange);
+    await sync.updateDocument("visits", "visit-1", {
+      nextVisitDate: updatedDate,
+      nextVisitTask: "Check updated treatment",
+    });
+
+    expect(sync.getDocument("visits", "visit-1")).toMatchObject({
+      nextVisitDate: updatedDate,
+      nextVisitTask: "Check updated treatment",
+      _pendingSync: true,
+    });
+    expect(sync.getPendingCount()).toBe(1);
+    expect(onLocalChange).toHaveBeenCalled();
+
+    // Simulate the app being terminated before connectivity returns. Both the
+    // cache and queue must restore the reminder on the next launch.
+    jest.resetModules();
+    sync = require("../sync-manager") as typeof import("../sync-manager");
+    await sync.initSync();
+    expect(sync.getDocument("visits", "visit-1")?.nextVisitDate).toBe(updatedDate);
+    expect(sync.getPendingCount()).toBe(1);
+
+    let publishedVisit: any = originalVisit;
+    mockDatabases.updateDocument.mockImplementation(
+      async (_db: string, collectionId: string, documentId: string, data: Record<string, any>) => {
+        publishedVisit = serverDoc(collectionId, documentId, {
+          ...publishedVisit,
+          ...data,
+        });
+        return publishedVisit;
+      }
+    );
+    mockDatabases.listDocuments.mockImplementation(
+      async (_db: string, collectionId: string, queries: string[]) => {
+        if (collectionId === "visits") {
+          return { documents: [publishedVisit], total: 1 };
+        }
+        return { documents: [], total: 0 };
+      }
+    );
+
+    sync.setOnline();
+    await sync.syncNow({ ensurePull: true });
+
+    expect(mockDatabases.updateDocument).toHaveBeenCalledWith(
+      "db",
+      "visits",
+      "visit-1",
+      {
+        nextVisitDate: updatedDate,
+        nextVisitTask: "Check updated treatment",
+      }
+    );
+    expect(publishedVisit).toMatchObject({
+      nextVisitDate: updatedDate,
+      nextVisitTask: "Check updated treatment",
+    });
+    expect(sync.getPendingCount()).toBe(0);
+    expect(sync.getSyncStatus()).toBe("idle");
+  });
+
+  test("preserves explicit reminder deletion values in the offline queue", async () => {
+    const recentSync = new Date().toISOString();
+    const originalVisit = serverDoc("visits", "visit-1", {
+      customerId: "customer-1",
+      nextVisitDate: "2026-08-10T00:00:00.000Z",
+      nextVisitTask: "Old task",
+    });
+    storageState.set("@fa_visits", JSON.stringify([originalVisit]));
+    storageState.set("@fa_last_sync", recentSync);
+    storageState.set("@fa_last_core_full_sync", recentSync);
+
+    const sync = require("../sync-manager") as typeof import("../sync-manager");
+    await sync.initSync();
+    sync.setOffline();
+    await sync.updateDocument("visits", "visit-1", {
+      nextVisitDate: null,
+      nextVisitTask: null,
+    });
+
+    const persistedQueue = JSON.parse(storageState.get("@fa_pending_queue")!);
+    expect(persistedQueue[0].data).toEqual({
+      nextVisitDate: null,
+      nextVisitTask: null,
+    });
+
+    let publishedVisit: any = originalVisit;
+    mockDatabases.updateDocument.mockImplementation(
+      async (_db: string, collectionId: string, documentId: string, data: Record<string, any>) => {
+        publishedVisit = serverDoc(collectionId, documentId, {
+          ...publishedVisit,
+          ...data,
+        });
+        return publishedVisit;
+      }
+    );
+    mockDatabases.listDocuments.mockImplementation(
+      async (_db: string, collectionId: string) =>
+        collectionId === "visits"
+          ? { documents: [publishedVisit], total: 1 }
+          : { documents: [], total: 0 }
+    );
+
+    sync.setOnline();
+    await sync.syncNow({ ensurePull: true });
+
+    expect(mockDatabases.updateDocument).toHaveBeenCalledWith(
+      "db",
+      "visits",
+      "visit-1",
+      { nextVisitDate: null, nextVisitTask: null }
+    );
+    expect(publishedVisit.nextVisitDate).toBeNull();
+    expect(publishedVisit.nextVisitTask).toBeNull();
+    expect(sync.getPendingCount()).toBe(0);
   });
 
   test("deleting after a lost create response queues idempotent server cleanup", async () => {
@@ -333,6 +483,62 @@ describe("sync-manager offline queue", () => {
         call[2].includes("limit:1") ||
         call[2].some((query: string) => query.startsWith("greaterThanEqual:"))
     )).toBe(true);
+  });
+
+  test("reconciles another user's reminder update even when the last pull is recent", async () => {
+    const recentSync = new Date().toISOString();
+    const cachedVisit = serverDoc("visits", "visit-1", {
+      customerId: "customer-1",
+      nextVisitDate: "2026-08-10T00:00:00.000Z",
+    });
+    const sharedVisit = serverDoc("visits", "visit-1", {
+      customerId: "customer-1",
+      nextVisitDate: "2026-08-20T00:00:00.000Z",
+    });
+    storageState.set("@fa_visits", JSON.stringify([cachedVisit]));
+    storageState.set("@fa_last_sync", recentSync);
+    storageState.set("@fa_last_core_full_sync", recentSync);
+
+    mockDatabases.listDocuments.mockImplementation(
+      async (_db: string, collectionId: string, queries: string[]) => {
+        if (collectionId !== "visits") return { documents: [], total: 0 };
+        if (queries.some((query) => query.startsWith("greaterThanEqual:"))) {
+          return { documents: [sharedVisit], total: 1 };
+        }
+        return { documents: [sharedVisit], total: 1 };
+      }
+    );
+
+    const sync = require("../sync-manager") as typeof import("../sync-manager");
+    await sync.initSync();
+    await sync.syncNow({ ensurePull: true });
+
+    expect(mockDatabases.listDocuments).toHaveBeenCalled();
+    expect(sync.getDocument("visits", "visit-1")?.nextVisitDate).toBe(
+      "2026-08-20T00:00:00.000Z"
+    );
+  });
+
+  test("applies reminder realtime events from another user to the local cache", async () => {
+    const sync = require("../sync-manager") as typeof import("../sync-manager");
+    await sync.initSync();
+    sync.startRealtime();
+
+    expect(mockRealtimeCallback).not.toBeNull();
+    mockRealtimeCallback!({
+      events: ["databases.db.collections.visits.documents.visit-1.update"],
+      payload: serverDoc("visits", "visit-1", {
+        customerId: "customer-1",
+        nextVisitDate: "2026-08-25T00:00:00.000Z",
+        nextVisitTask: "Shared reminder",
+      }),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(sync.getDocument("visits", "visit-1")).toMatchObject({
+      nextVisitDate: "2026-08-25T00:00:00.000Z",
+      nextVisitTask: "Shared reminder",
+    });
   });
 
   test("promotes a collection to a full scan when a delete changes its count", async () => {

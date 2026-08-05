@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity, Modal, FlatList } from "react-native";
+import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity, Modal } from "react-native";
 import { useState, useCallback } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useFocusEffect } from "expo-router";
@@ -6,6 +6,7 @@ import { Bell, Calendar, Sprout, ChevronLeft, ChevronRight, ChevronDown, X } fro
 import { VISITS_COLLECTION_ID, CUSTOMERS_COLLECTION_ID } from "@/lib/appwrite";
 import { getCollection } from "@/lib/sync-manager";
 import { useNetwork, useDataChange } from "@/lib/network-provider";
+import { getReminderDateKeys, toLocalDateKey } from "@/lib/reminder-utils";
 
 interface CustomerMap {
   [key: string]: { name: string; cropType?: string };
@@ -31,7 +32,7 @@ export default function CalendarScreen() {
   const [showMonthPicker, setShowMonthPicker] = useState(false);
   const [pickerYear, setPickerYear] = useState(new Date().getFullYear());
   const [reminders, setReminders] = useState<Reminder[]>([]);
-  const [visitDates, setVisitDates] = useState<Set<string>>(new Set());
+  const [reminderDates, setReminderDates] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -46,21 +47,8 @@ export default function CalendarScreen() {
       customersRes.forEach((c) => {
         customerMap[c.$id] = { name: c.name, cropType: c.cropType };
       });
-      const toLocalDateStr = (dateStr: string) => {
-        const d = new Date(dateStr);
-        const y = d.getFullYear();
-        const m = String(d.getMonth() + 1).padStart(2, "0");
-        const day = String(d.getDate()).padStart(2, "0");
-        return `${y}-${m}-${day}`;
-      };
-
-      const dates = new Set<string>();
-      visitsRes.forEach((d) => {
-        if (d.visitDate) dates.add(toLocalDateStr(d.visitDate));
-        if (d.nextVisitDate) dates.add(toLocalDateStr(d.nextVisitDate));
-      });
-      setVisitDates(dates);
       const reminderDocs = visitsRes.filter((d) => d.nextVisitDate);
+      setReminderDates(getReminderDateKeys(reminderDocs));
       setReminders(
         reminderDocs.map((d) => {
           const customer = customerMap[d.customerId] || { name: "Unknown", cropType: undefined };
@@ -77,6 +65,7 @@ export default function CalendarScreen() {
       );
     } catch {
       setReminders([]);
+      setReminderDates(new Set());
     } finally {
       setLoading(false);
     }
@@ -113,33 +102,28 @@ export default function CalendarScreen() {
     const d = prevMonthDays - i;
     const dt = new Date(year, month - 1, d);
     const fd = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
-    calendarDays.push({ date: d, isCurrentMonth: false, isToday: false, isMarked: visitDates.has(fd), isSelected: fd === selectedDate, fullDate: fd });
+    calendarDays.push({ date: d, isCurrentMonth: false, isToday: false, isMarked: reminderDates.has(fd), isSelected: fd === selectedDate, fullDate: fd });
   }
   for (let d = 1; d <= daysInMonth; d++) {
     const dt = new Date(year, month, d);
     const fd = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
-    calendarDays.push({ date: d, isCurrentMonth: true, isToday: fd === todayStr, isMarked: visitDates.has(fd), isSelected: fd === selectedDate, fullDate: fd });
+    calendarDays.push({ date: d, isCurrentMonth: true, isToday: fd === todayStr, isMarked: reminderDates.has(fd), isSelected: fd === selectedDate, fullDate: fd });
   }
   const remaining = 42 - calendarDays.length;
   for (let d = 1; d <= remaining; d++) {
     const dt = new Date(year, month + 1, d);
     const fd = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
-    calendarDays.push({ date: d, isCurrentMonth: false, isToday: false, isMarked: visitDates.has(fd), isSelected: fd === selectedDate, fullDate: fd });
+    calendarDays.push({ date: d, isCurrentMonth: false, isToday: false, isMarked: reminderDates.has(fd), isSelected: fd === selectedDate, fullDate: fd });
   }
 
-  const toLocalDateStr = (dateStr: string) => {
-    const d = new Date(dateStr);
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
-  };
-
   const filteredReminders = selectedDate
-    ? reminders.filter((r) => toLocalDateStr(r.nextVisitDate) === selectedDate)
+    ? reminders.filter((r) => toLocalDateKey(r.nextVisitDate) === selectedDate)
     // No date selected → show only upcoming (today onward); past/overdue ones appear
     // only when their day is explicitly selected on the calendar.
-    : reminders.filter((r) => toLocalDateStr(r.nextVisitDate) >= todayStr);
+    : reminders.filter((r) => {
+        const dateKey = toLocalDateKey(r.nextVisitDate);
+        return dateKey !== null && dateKey >= todayStr;
+      });
 
   const formatDate = (dateStr: string) => new Date(dateStr).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
 
@@ -219,7 +203,7 @@ export default function CalendarScreen() {
         <View style={styles.legendRow}>
           <View style={styles.legendItem}>
             <View style={styles.legendDot} />
-            <Text style={styles.legendText}>Visit / Reminder</Text>
+            <Text style={styles.legendText}>Reminder</Text>
           </View>
           <View style={styles.legendItem}>
             <View style={styles.legendToday}>
