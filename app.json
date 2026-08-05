@@ -2,7 +2,7 @@
   "expo": {
     "name": "CCS SmartVisit",
     "slug": "field-agent",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "myapp",
@@ -10,14 +10,17 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.agri.fieldagent"
+      "bundleIdentifier": "com.agri.fieldagent",
+      "buildNumber": "2"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "package": "com.agri.fieldagent"
+      "package": "com.agri.fieldagent",
+      "versionCode": 2,
+      "allowBackup": false
     },
     "web": {
       "bundler": "metro",

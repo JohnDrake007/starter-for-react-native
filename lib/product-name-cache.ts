@@ -4,8 +4,9 @@
 // recreates inventory_items with new Appwrite $ids.
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { APPWRITE_STORAGE_NAMESPACE } from "./appwrite";
 
-const STORAGE_KEY = "@fa_product_name_cache";
+const STORAGE_KEY = `${APPWRITE_STORAGE_NAMESPACE}:product_name_cache`;
 
 let mem: Record<string, string> = {};
 let loaded = false;

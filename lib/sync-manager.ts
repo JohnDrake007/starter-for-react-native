@@ -1,6 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as FileSystem from "expo-file-system/legacy";
-import { client, databases, storage, Query, DATABASE_ID, CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, VISIT_PHOTOS_COLLECTION_ID, INVENTORY_ITEMS_COLLECTION_ID, INVENTORY_BATCHES_COLLECTION_ID } from "./appwrite";
+import { client, databases, storage, Query, DATABASE_ID, APPWRITE_STORAGE_NAMESPACE, CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, RECOMMENDATIONS_COLLECTION_ID, VISIT_PHOTOS_COLLECTION_ID, INVENTORY_ITEMS_COLLECTION_ID, INVENTORY_BATCHES_COLLECTION_ID } from "./appwrite";
 // Lazy import to avoid circular deps — imported inline in syncNow
 let _scheduleVisitReminders: (() => Promise<void>) | null = null;
 let notificationRefreshActive: Promise<void> | null = null;
@@ -41,18 +41,18 @@ async function finalizeCollectionMutation(collectionId: string): Promise<void> {
 
 // ── Storage Keys ──────────────────────────────────────────────────────────────
 const STORAGE_KEYS: Record<string, string> = {
-  [CUSTOMERS_COLLECTION_ID]: "@fa_customers",
-  [VISITS_COLLECTION_ID]: "@fa_visits",
-  [RECOMMENDATIONS_COLLECTION_ID]: "@fa_recommendations",
-  [VISIT_PHOTOS_COLLECTION_ID]: "@fa_visit_photos",
-  [INVENTORY_ITEMS_COLLECTION_ID]: "@fa_inventory_items",
-  [INVENTORY_BATCHES_COLLECTION_ID]: "@fa_inventory_batches",
+  [CUSTOMERS_COLLECTION_ID]: `${APPWRITE_STORAGE_NAMESPACE}:customers`,
+  [VISITS_COLLECTION_ID]: `${APPWRITE_STORAGE_NAMESPACE}:visits`,
+  [RECOMMENDATIONS_COLLECTION_ID]: `${APPWRITE_STORAGE_NAMESPACE}:recommendations`,
+  [VISIT_PHOTOS_COLLECTION_ID]: `${APPWRITE_STORAGE_NAMESPACE}:visit_photos`,
+  [INVENTORY_ITEMS_COLLECTION_ID]: `${APPWRITE_STORAGE_NAMESPACE}:inventory_items`,
+  [INVENTORY_BATCHES_COLLECTION_ID]: `${APPWRITE_STORAGE_NAMESPACE}:inventory_batches`,
 };
-const PENDING_QUEUE_KEY = "@fa_pending_queue";
-const LAST_SYNC_KEY = "@fa_last_sync";
-const LAST_INVENTORY_SYNC_KEY = "@fa_last_inventory_sync";
-const LAST_CORE_FULL_SYNC_KEY = "@fa_last_core_full_sync";
-const LAST_INVENTORY_FULL_SYNC_KEY = "@fa_last_inventory_full_sync";
+const PENDING_QUEUE_KEY = `${APPWRITE_STORAGE_NAMESPACE}:pending_queue`;
+const LAST_SYNC_KEY = `${APPWRITE_STORAGE_NAMESPACE}:last_sync`;
+const LAST_INVENTORY_SYNC_KEY = `${APPWRITE_STORAGE_NAMESPACE}:last_inventory_sync`;
+const LAST_CORE_FULL_SYNC_KEY = `${APPWRITE_STORAGE_NAMESPACE}:last_core_full_sync`;
+const LAST_INVENTORY_FULL_SYNC_KEY = `${APPWRITE_STORAGE_NAMESPACE}:last_inventory_full_sync`;
 const CORE_PULL_MIN_INTERVAL_MS = 5 * 60 * 1000;
 const INVENTORY_PULL_MIN_INTERVAL_MS = 15 * 60 * 1000;
 const FULL_RECONCILIATION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;

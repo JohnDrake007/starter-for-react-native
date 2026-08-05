@@ -57,6 +57,7 @@ jest.mock("../appwrite", () => ({
       `greaterThanEqual:${attribute}:${value}`,
   },
   DATABASE_ID: "db",
+  APPWRITE_STORAGE_NAMESPACE: "@fa:test-project:db",
   CUSTOMERS_COLLECTION_ID: "customers",
   VISITS_COLLECTION_ID: "visits",
   RECOMMENDATIONS_COLLECTION_ID: "recommendations",
@@ -64,6 +65,8 @@ jest.mock("../appwrite", () => ({
   INVENTORY_ITEMS_COLLECTION_ID: "inventory_items",
   INVENTORY_BATCHES_COLLECTION_ID: "inventory_batches",
 }));
+
+const storageKey = (suffix: string) => `@fa:test-project:db:${suffix}`;
 
 jest.mock("../notification-manager", () => ({
   scheduleVisitReminders: jest.fn(async () => undefined),
@@ -261,9 +264,9 @@ describe("sync-manager offline queue", () => {
       nextVisitDate: previousDate,
       nextVisitTask: "Old task",
     });
-    storageState.set("@fa_visits", JSON.stringify([originalVisit]));
-    storageState.set("@fa_last_sync", recentSync);
-    storageState.set("@fa_last_core_full_sync", recentSync);
+    storageState.set(storageKey("visits"), JSON.stringify([originalVisit]));
+    storageState.set(storageKey("last_sync"), recentSync);
+    storageState.set(storageKey("last_core_full_sync"), recentSync);
 
     let sync = require("../sync-manager") as typeof import("../sync-manager");
     await sync.initSync();
@@ -337,9 +340,9 @@ describe("sync-manager offline queue", () => {
       nextVisitDate: "2026-08-10T00:00:00.000Z",
       nextVisitTask: "Old task",
     });
-    storageState.set("@fa_visits", JSON.stringify([originalVisit]));
-    storageState.set("@fa_last_sync", recentSync);
-    storageState.set("@fa_last_core_full_sync", recentSync);
+    storageState.set(storageKey("visits"), JSON.stringify([originalVisit]));
+    storageState.set(storageKey("last_sync"), recentSync);
+    storageState.set(storageKey("last_core_full_sync"), recentSync);
 
     const sync = require("../sync-manager") as typeof import("../sync-manager");
     await sync.initSync();
@@ -349,7 +352,7 @@ describe("sync-manager offline queue", () => {
       nextVisitTask: null,
     });
 
-    const persistedQueue = JSON.parse(storageState.get("@fa_pending_queue")!);
+    const persistedQueue = JSON.parse(storageState.get(storageKey("pending_queue"))!);
     expect(persistedQueue[0].data).toEqual({
       nextVisitDate: null,
       nextVisitTask: null,
@@ -431,17 +434,17 @@ describe("sync-manager offline queue", () => {
   });
 
   test("backs up corrupt queue data and recovers without crashing startup", async () => {
-    storageState.set("@fa_pending_queue", "{not-json");
+    storageState.set(storageKey("pending_queue"), "{not-json");
     const sync = require("../sync-manager") as typeof import("../sync-manager");
 
     await sync.initSync();
 
-    expect(storageState.get("@fa_pending_queue_corrupt_backup")).toBe("{not-json");
+    expect(storageState.get(`${storageKey("pending_queue")}_corrupt_backup`)).toBe("{not-json");
     expect(sync.getPendingCount()).toBe(0);
   });
 
   test("removes an orphan placeholder left by an interrupted local transaction", async () => {
-    storageState.set("@fa_visits", JSON.stringify([
+    storageState.set(storageKey("visits"), JSON.stringify([
       { $id: "local_orphan", observations: "never queued", _pendingSync: true },
     ]));
     const sync = require("../sync-manager") as typeof import("../sync-manager");
@@ -451,12 +454,34 @@ describe("sync-manager offline queue", () => {
     expect(sync.getCollection("visits")).toHaveLength(0);
   });
 
+  test("ignores cache and pending writes restored from an older Appwrite project", async () => {
+    storageState.set("@fa_visits", JSON.stringify([
+      { $id: "old-visit", nextVisitTask: "Must not leak into production" },
+    ]));
+    storageState.set("@fa_pending_queue", JSON.stringify([
+      {
+        id: "old-mutation",
+        action: "update",
+        collectionId: "visits",
+        docId: "old-visit",
+        data: { nextVisitTask: "Must not sync" },
+        timestamp: Date.now(),
+      },
+    ]));
+
+    const sync = require("../sync-manager") as typeof import("../sync-manager");
+    await sync.initSync();
+
+    expect(sync.getCollection("visits")).toHaveLength(0);
+    expect(sync.getPendingCount()).toBe(0);
+  });
+
   test("uses deltas and count probes instead of full scans for routine pulls", async () => {
     const customer = serverDoc("customers", "customer-1", { name: "A" });
     const sixMinutesAgo = new Date(Date.now() - 6 * 60 * 1000).toISOString();
-    storageState.set("@fa_customers", JSON.stringify([customer]));
-    storageState.set("@fa_last_sync", sixMinutesAgo);
-    storageState.set("@fa_last_core_full_sync", new Date().toISOString());
+    storageState.set(storageKey("customers"), JSON.stringify([customer]));
+    storageState.set(storageKey("last_sync"), sixMinutesAgo);
+    storageState.set(storageKey("last_core_full_sync"), new Date().toISOString());
 
     mockDatabases.listDocuments.mockImplementation(
       async (_db: string, collectionId: string, queries: string[]) => {
@@ -495,9 +520,9 @@ describe("sync-manager offline queue", () => {
       customerId: "customer-1",
       nextVisitDate: "2026-08-20T00:00:00.000Z",
     });
-    storageState.set("@fa_visits", JSON.stringify([cachedVisit]));
-    storageState.set("@fa_last_sync", recentSync);
-    storageState.set("@fa_last_core_full_sync", recentSync);
+    storageState.set(storageKey("visits"), JSON.stringify([cachedVisit]));
+    storageState.set(storageKey("last_sync"), recentSync);
+    storageState.set(storageKey("last_core_full_sync"), recentSync);
 
     mockDatabases.listDocuments.mockImplementation(
       async (_db: string, collectionId: string, queries: string[]) => {
@@ -544,9 +569,9 @@ describe("sync-manager offline queue", () => {
   test("promotes a collection to a full scan when a delete changes its count", async () => {
     const visit = serverDoc("visits", "visit-1", { observations: "old" });
     const sixMinutesAgo = new Date(Date.now() - 6 * 60 * 1000).toISOString();
-    storageState.set("@fa_visits", JSON.stringify([visit]));
-    storageState.set("@fa_last_sync", sixMinutesAgo);
-    storageState.set("@fa_last_core_full_sync", new Date().toISOString());
+    storageState.set(storageKey("visits"), JSON.stringify([visit]));
+    storageState.set(storageKey("last_sync"), sixMinutesAgo);
+    storageState.set(storageKey("last_core_full_sync"), new Date().toISOString());
 
     mockDatabases.listDocuments.mockImplementation(
       async (_db: string, _collectionId: string, queries: string[]) => {

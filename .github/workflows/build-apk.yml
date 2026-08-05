@@ -26,11 +26,11 @@ jobs:
       - name: Create .env for build
         run: |
           cat > .env << 'ENVEOF'
-          EXPO_PUBLIC_APPWRITE_ENDPOINT=${{ secrets.EXPO_PUBLIC_APPWRITE_ENDPOINT }}
-          EXPO_PUBLIC_APPWRITE_PROJECT_ID=${{ secrets.EXPO_PUBLIC_APPWRITE_PROJECT_ID }}
-          EXPO_PUBLIC_APPWRITE_PROJECT_NAME=${{ secrets.EXPO_PUBLIC_APPWRITE_PROJECT_NAME }}
-          EXPO_PUBLIC_APPWRITE_DATABASE_ID=${{ secrets.EXPO_PUBLIC_APPWRITE_DATABASE_ID }}
-          EXPO_PUBLIC_APPWRITE_STORAGE_BUCKET_ID=${{ secrets.EXPO_PUBLIC_APPWRITE_STORAGE_BUCKET_ID }}
+          EXPO_PUBLIC_APPWRITE_ENDPOINT=https://sgp.cloud.appwrite.io/v1
+          EXPO_PUBLIC_APPWRITE_PROJECT_ID=6a6ebd81003a7ff40656
+          EXPO_PUBLIC_APPWRITE_PROJECT_NAME=CCS Smartvisit
+          EXPO_PUBLIC_APPWRITE_DATABASE_ID=field_agent_db
+          EXPO_PUBLIC_APPWRITE_STORAGE_BUCKET_ID=visit-photos
           ENVEOF
 
       - name: Build APK on EAS
