@@ -7,6 +7,7 @@ import {
   getSyncStatus,
   getLastSyncTime,
   getPendingCount,
+  syncInventoryCollections,
   addSyncListener,
   addDataChangeListener,
   setOffline,
@@ -22,7 +23,7 @@ interface NetworkContextValue {
   syncStatus: SyncStatus;
   lastSyncTime: string | null;
   pendingCount: number;
-  syncNow: () => Promise<void>;
+  syncNow: (options?: { full?: boolean }) => Promise<void>;
   initialized: boolean;
 }
 
@@ -77,14 +78,20 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
     retryCountRef.current = 0;
   }, []);
 
-  const attemptSync = useCallback(async (ensurePull = false) => {
+  const attemptSync = useCallback(async () => {
     if (retryTimerRef.current) {
       clearTimeout(retryTimerRef.current);
       retryTimerRef.current = null;
     }
 
     try {
-      await syncNow({ ensurePull });
+      // Missing sync timestamps already make the lower-level managers perform
+      // their initial full reads. Keep lifecycle attempts incremental here so
+      // a retry after one phase succeeds does not repeat completed full scans.
+      await syncNow({ ensurePull: true });
+      if (getSyncStatus() !== "error") {
+        await syncInventoryCollections({ ensurePull: true });
+      }
     } catch {}
     setLastSync(getLastSyncTime());
     setPendingCount(getPendingCount());
@@ -101,7 +108,7 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
       retryTimerRef.current = setTimeout(() => {
         // A retry after reconnect/startup must still reconcile changes that
         // other users made while this device was disconnected.
-        attemptSync(ensurePull);
+        attemptSync();
       }, delay);
     } else {
       retryCountRef.current = 0;
@@ -128,7 +135,9 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
       if (online) {
         // Reconcile even when the cached sync timestamp is recent. Realtime
         // does not replay events that arrived while the app was not running.
-        await attemptSync(true);
+        // The first successful run establishes a complete local mirror. Every
+        // later launch only requests deltas (plus count probes for deletions).
+        await attemptSync();
         if (!mounted) return;
         // Subscribe to realtime so changes from other devices land live.
         startRealtime();
@@ -177,7 +186,7 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
           if (wasOfflineRef.current) {
             // Pull the delta missed while offline after queued writes are
             // pushed, making those reminders visible across every device.
-            await attemptSync(true);
+            await attemptSync();
           }
           wasOfflineRef.current = false;
           // (Re)subscribe to realtime now that we're back online.
@@ -226,7 +235,7 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
         // Re-arm realtime only if it isn't already running (no-op if active).
         startRealtime();
         // Reconcile events that may have been missed while JS was suspended.
-        await attemptSync(true);
+        await attemptSync();
       } else {
         wasOfflineRef.current = true;
         setOffline();
@@ -238,9 +247,14 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
   }, [attemptSync, clearRetry]);
 
   // ── Manual sync handler ──
-  const handleSyncNow = useCallback(async () => {
+  const handleSyncNow = useCallback(async (options: { full?: boolean } = {}) => {
     try {
-      await syncNow({ forcePull: true });
+      await syncNow(options.full ? { forcePull: true } : { ensurePull: true });
+      if (getSyncStatus() !== "error") {
+        await syncInventoryCollections(
+          options.full ? { forceFull: true } : { ensurePull: true }
+        );
+      }
       setLastSync(getLastSyncTime());
       setPendingCount(getPendingCount());
     } catch {}

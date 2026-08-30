@@ -196,7 +196,6 @@ export default function ProductDetailScreen() {
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await syncNow();
-    await syncInventoryCollections(true);
     await loadData();
     setRefreshing(false);
   }, [loadData, syncNow]);

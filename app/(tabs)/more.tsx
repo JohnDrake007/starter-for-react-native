@@ -11,7 +11,7 @@ export default function MoreScreen() {
   const { isOnline, syncStatus, lastSyncTime, pendingCount, syncNow } = useNetwork();
 
   const handleSync = async () => {
-    await syncNow();
+    await syncNow({ full: true });
   };
 
   const getStatusColor = () => {

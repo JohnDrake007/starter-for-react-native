@@ -51,11 +51,8 @@ const STORAGE_KEYS: Record<string, string> = {
 const PENDING_QUEUE_KEY = `${APPWRITE_STORAGE_NAMESPACE}:pending_queue`;
 const LAST_SYNC_KEY = `${APPWRITE_STORAGE_NAMESPACE}:last_sync`;
 const LAST_INVENTORY_SYNC_KEY = `${APPWRITE_STORAGE_NAMESPACE}:last_inventory_sync`;
-const LAST_CORE_FULL_SYNC_KEY = `${APPWRITE_STORAGE_NAMESPACE}:last_core_full_sync`;
-const LAST_INVENTORY_FULL_SYNC_KEY = `${APPWRITE_STORAGE_NAMESPACE}:last_inventory_full_sync`;
 const CORE_PULL_MIN_INTERVAL_MS = 5 * 60 * 1000;
 const INVENTORY_PULL_MIN_INTERVAL_MS = 15 * 60 * 1000;
-const FULL_RECONCILIATION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 export type SyncStatus = "idle" | "syncing" | "error" | "offline";
@@ -110,8 +107,6 @@ const cache: Record<string, any[]> = {};
 let pendingQueue: PendingMutation[] = [];
 let lastSyncTime: string | null = null;
 let lastInventorySyncTime: string | null = null;
-let lastCoreFullSyncTime: string | null = null;
-let lastInventoryFullSyncTime: string | null = null;
 let currentStatus: SyncStatus = "idle";
 const listeners: Set<SyncListener> = new Set();
 // Fired whenever the local cache is mutated (pull, push, or a realtime event)
@@ -529,8 +524,6 @@ export async function initSync(): Promise<void> {
     // Load last sync time
     lastSyncTime = await AsyncStorage.getItem(LAST_SYNC_KEY);
     lastInventorySyncTime = await AsyncStorage.getItem(LAST_INVENTORY_SYNC_KEY);
-    lastCoreFullSyncTime = await AsyncStorage.getItem(LAST_CORE_FULL_SYNC_KEY);
-    lastInventoryFullSyncTime = await AsyncStorage.getItem(LAST_INVENTORY_FULL_SYNC_KEY);
   } catch (e) {
     console.warn("[SyncManager] initSync error:", e);
   } finally {
@@ -1065,7 +1058,7 @@ async function runSync(options: { forcePull?: boolean; ensurePull?: boolean }): 
 
     // Routine calls honor a short freshness window. Lifecycle reconciliation
     // can bypass that window with `ensurePull` while still using cheap delta
-    // reads; only `forcePull` or the weekly safety pass performs full scans.
+    // reads; only `forcePull` performs full scans after the initial sync.
     const lastPullAge = lastSyncTime
       ? Date.now() - new Date(lastSyncTime).getTime()
       : Number.POSITIVE_INFINITY;
@@ -1078,7 +1071,7 @@ async function runSync(options: { forcePull?: boolean; ensurePull?: boolean }): 
 
     if (shouldPull) {
       // ── 2. Pull fresh data from all collections ──
-      await pullAllCollections(options.forcePull === true, syncStartedAt);
+      await pullAllCollections(options.forcePull === true);
       reconciliationRequired = false;
 
       // ── 3. Update last successful reconciliation time ──
@@ -1340,24 +1333,15 @@ async function pullCollection(
 /**
  * Pull data from Appwrite and merge it into the local cache.
  *
- * Routine pulls use updated-at deltas plus count probes. First sync, manual
- * refresh, and a weekly safety pass perform full cursor-paginated scans. Count
- * divergence also immediately promotes just that collection to a full scan,
- * preserving hard-delete reconciliation without paying for every row whenever
- * the app resumes.
+ * Routine pulls use updated-at deltas plus count probes. The first sync and an
+ * explicitly forced sync perform full cursor-paginated scans. After the initial
+ * sync, routine pulls remain incremental. Count divergence still promotes just
+ * that collection to a full scan so hard deletes missed while offline are
+ * removed.
  */
-async function pullAllCollections(
-  forceFull = false,
-  syncStartedAt = new Date().toISOString()
-): Promise<void> {
+async function pullAllCollections(forceFull = false): Promise<void> {
   const failures: string[] = [];
-  const fullSyncAge = lastCoreFullSyncTime
-    ? Date.now() - new Date(lastCoreFullSyncTime).getTime()
-    : Number.POSITIVE_INFINITY;
-  const fullAll =
-    forceFull ||
-    !lastSyncTime ||
-    fullSyncAge >= FULL_RECONCILIATION_MAX_AGE_MS;
+  const fullAll = forceFull || !lastSyncTime;
 
   for (const collectionId of SYNCABLE_COLLECTIONS) {
     try {
@@ -1371,26 +1355,49 @@ async function pullAllCollections(
   if (failures.length > 0) {
     throw new Error(`Could not refresh ${failures.join(", ")}`);
   }
-  if (fullAll) {
-    lastCoreFullSyncTime = syncStartedAt;
-    await AsyncStorage.setItem(LAST_CORE_FULL_SYNC_KEY, lastCoreFullSyncTime);
-  }
 }
 
 /**
- * Sync inventory_items and inventory_batches on-demand.
- * Called from product screens — does NOT block the main syncNow cycle.
+ * Sync inventory_items and inventory_batches independently of the core cycle.
+ * Lifecycle/manual orchestration may call this after core sync, while product
+ * screens can still request it directly when their cache is empty.
  */
-export async function syncInventoryCollections(force = false): Promise<void> {
+export interface InventorySyncOptions {
+  /** Re-read every inventory document, bypassing the freshness window. */
+  forceFull?: boolean;
+  /** Run an incremental pull even when inventory was checked recently. */
+  ensurePull?: boolean;
+}
+
+export async function syncInventoryCollections(
+  options: InventorySyncOptions | boolean = {}
+): Promise<void> {
   if (activeInventorySync) return activeInventorySync;
+  // Keep boolean support for older callers: `true` historically meant a full pull.
+  const forceFull = typeof options === "boolean"
+    ? options
+    : options.forceFull === true;
+  const ensurePull = typeof options === "boolean"
+    ? false
+    : options.ensurePull === true;
   const lastPullAge = lastInventorySyncTime
     ? Date.now() - new Date(lastInventorySyncTime).getTime()
     : Number.POSITIVE_INFINITY;
-  if (!force && lastPullAge < INVENTORY_PULL_MIN_INTERVAL_MS) return;
+  if (!forceFull && !ensurePull && lastPullAge < INVENTORY_PULL_MIN_INTERVAL_MS) return;
 
-  activeInventorySync = runInventorySync(force).finally(() => {
-    activeInventorySync = null;
-  });
+  const ownsStatus = !activeSync;
+  if (ownsStatus) broadcast("syncing");
+  activeInventorySync = runInventorySync(forceFull)
+    .then(() => {
+      if (ownsStatus) broadcast("idle", "Inventory sync complete");
+    })
+    .catch((e: any) => {
+      if (ownsStatus) broadcast("error", e?.message || "Inventory sync failed");
+      throw e;
+    })
+    .finally(() => {
+      activeInventorySync = null;
+    });
   return activeInventorySync;
 }
 
@@ -1404,13 +1411,7 @@ async function runInventorySync(forceFull = false): Promise<void> {
   } catch {}
 
   const failures: string[] = [];
-  const fullSyncAge = lastInventoryFullSyncTime
-    ? Date.now() - new Date(lastInventoryFullSyncTime).getTime()
-    : Number.POSITIVE_INFINITY;
-  const fullAll =
-    forceFull ||
-    !lastInventorySyncTime ||
-    fullSyncAge >= FULL_RECONCILIATION_MAX_AGE_MS;
+  const fullAll = forceFull || !lastInventorySyncTime;
 
   for (const collectionId of INVENTORY_COLLECTIONS) {
     try {
@@ -1424,13 +1425,6 @@ async function runInventorySync(forceFull = false): Promise<void> {
   if (failures.length === 0) {
     lastInventorySyncTime = syncStartedAt;
     await AsyncStorage.setItem(LAST_INVENTORY_SYNC_KEY, lastInventorySyncTime);
-    if (fullAll) {
-      lastInventoryFullSyncTime = syncStartedAt;
-      await AsyncStorage.setItem(
-        LAST_INVENTORY_FULL_SYNC_KEY,
-        lastInventoryFullSyncTime
-      );
-    }
     try {
       const { seedProductNamesFromInventory } = await import("./product-name-cache");
       seedProductNamesFromInventory(cache[INVENTORY_ITEMS_COLLECTION_ID] || []);

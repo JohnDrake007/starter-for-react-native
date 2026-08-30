@@ -510,6 +510,87 @@ describe("sync-manager offline queue", () => {
     )).toBe(true);
   });
 
+  test("does not promote an old routine core sync to a periodic full scan", async () => {
+    const oldSync = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    storageState.set(storageKey("last_sync"), oldSync);
+
+    mockDatabases.listDocuments.mockImplementation(
+      async (_db: string, _collectionId: string, queries: string[]) => {
+        if (queries.some((query) => query.startsWith("greaterThanEqual:"))) {
+          return { documents: [], total: 0 };
+        }
+        if (queries.includes("limit:1")) {
+          return { documents: [], total: 0 };
+        }
+        throw new Error("Unexpected full scan during an incremental refresh");
+      }
+    );
+
+    const sync = require("../sync-manager") as typeof import("../sync-manager");
+    await sync.initSync();
+    await sync.syncNow({ ensurePull: true });
+
+    expect(sync.getSyncStatus()).toBe("idle");
+    expect(mockDatabases.listDocuments).toHaveBeenCalledTimes(8);
+    expect(mockDatabases.listDocuments.mock.calls.every(
+      (call) =>
+        call[2].includes("limit:1") ||
+        call[2].some((query: string) => query.startsWith("greaterThanEqual:"))
+    )).toBe(true);
+  });
+
+  test("supports an ensured inventory delta without forcing full reads", async () => {
+    const item = serverDoc("inventory_items", "item-1", {
+      guid: "guid-1",
+      item_name: "Neem oil",
+    });
+    storageState.set(storageKey("inventory_items"), JSON.stringify([item]));
+    storageState.set(storageKey("last_inventory_sync"), new Date().toISOString());
+
+    mockDatabases.listDocuments.mockImplementation(
+      async (_db: string, collectionId: string, queries: string[]) => {
+        if (queries.some((query) => query.startsWith("greaterThanEqual:"))) {
+          return { documents: [], total: 0 };
+        }
+        if (queries.includes("limit:1")) {
+          return collectionId === "inventory_items"
+            ? { documents: [item], total: 1 }
+            : { documents: [], total: 0 };
+        }
+        throw new Error("Unexpected full inventory scan");
+      }
+    );
+
+    const sync = require("../sync-manager") as typeof import("../sync-manager");
+    await sync.initSync();
+    await sync.syncInventoryCollections({ ensurePull: true });
+
+    expect(sync.getSyncStatus()).toBe("idle");
+    expect(mockDatabases.listDocuments).toHaveBeenCalledTimes(4);
+    expect(mockDatabases.listDocuments.mock.calls.every(
+      (call) =>
+        call[2].includes("limit:1") ||
+        call[2].some((query: string) => query.startsWith("greaterThanEqual:"))
+    )).toBe(true);
+  });
+
+  test("forces complete inventory reads when explicitly requested", async () => {
+    storageState.set(storageKey("last_inventory_sync"), new Date().toISOString());
+    mockDatabases.listDocuments.mockResolvedValue({ documents: [], total: 0 });
+
+    const sync = require("../sync-manager") as typeof import("../sync-manager");
+    await sync.initSync();
+    await sync.syncInventoryCollections({ forceFull: true });
+
+    expect(sync.getSyncStatus()).toBe("idle");
+    expect(mockDatabases.listDocuments).toHaveBeenCalledTimes(2);
+    expect(mockDatabases.listDocuments.mock.calls.every(
+      (call) =>
+        call[2].includes("limit:1000") &&
+        !call[2].some((query: string) => query.startsWith("greaterThanEqual:"))
+    )).toBe(true);
+  });
+
   test("reconciles another user's reminder update even when the last pull is recent", async () => {
     const recentSync = new Date().toISOString();
     const cachedVisit = serverDoc("visits", "visit-1", {

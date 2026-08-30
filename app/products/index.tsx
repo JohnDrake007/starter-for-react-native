@@ -196,7 +196,6 @@ export default function ProductCatalogScreen() {
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await syncNow();
-    await syncInventoryCollections(true);
     await fetchItems();
     setRefreshing(false);
   }, [fetchItems, syncNow]);
