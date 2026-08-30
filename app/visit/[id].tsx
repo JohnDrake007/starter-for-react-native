@@ -1,5 +1,5 @@
-import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity, Alert, Image, Modal, Pressable, Linking, Platform, TextInput } from "react-native";
-import { useState, useCallback, useRef } from "react";
+import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity, Alert, Image, Modal, Pressable, Linking, Platform, TextInput, AppState } from "react-native";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import DateTimePicker from "@react-native-community/datetimepicker";
@@ -11,6 +11,14 @@ import { getCollection, getDocument, updateDocument, createDocument, deleteDocum
 import { useNetwork } from "@/lib/network-provider";
 import { normalizeCategory, buildItemLookup, resolveRecProductName, resolveRecProductMeta } from "@/lib/inventory-utils";
 import { lookupCachedProductName, rememberProduct, seedProductNamesFromInventory } from "@/lib/product-name-cache";
+import {
+  clearVisitEditDraft,
+  loadVisitEditDraft,
+  removeDraftPhoto,
+  saveVisitEditDraft,
+  stageDraftPhoto,
+  type VisitEditDraftPayload,
+} from "@/lib/visit-drafts";
 
 interface Customer {
   name: string;
@@ -124,8 +132,67 @@ export default function VisitDetailScreen() {
   // Ref guards to prevent DateTimePicker double-fire on Android
   const editVisitDatePickerHandled = useRef(false);
   const editNextVisitDatePickerHandled = useRef(false);
+  const editDraftRestoredRef = useRef<string | null>(null);
+  const editDraftActiveRef = useRef(false);
+  const suppressEditDraftSaveRef = useRef(false);
+  const editDraftSnapshotRef = useRef<VisitEditDraftPayload | null>(null);
 
   const [showShareMenu, setShowShareMenu] = useState(false);
+
+  editDraftSnapshotRef.current = id ? {
+    visitId: id,
+    observations: editObservations,
+    nextVisitDate: editNextVisitDate,
+    nextVisitTask: editNextVisitTask,
+    visitDate: editVisitDate,
+    latitude: editLatitude,
+    longitude: editLongitude,
+    locationName: editLocationName,
+    newPhotos,
+    deletedPhotoIds,
+    recommendations: editRecs,
+  } : null;
+
+  const flushEditDraft = useCallback(async () => {
+    if (!editDraftActiveRef.current || suppressEditDraftSaveRef.current || !editDraftSnapshotRef.current) return;
+    try {
+      await saveVisitEditDraft(editDraftSnapshotRef.current);
+    } catch (error) {
+      console.warn("[VisitDetail] Could not save edit draft:", error);
+    }
+  }, []);
+
+  useEffect(() => {
+    editDraftActiveRef.current = editing;
+  }, [editing]);
+
+  useEffect(() => {
+    if (!editing || suppressEditDraftSaveRef.current) return;
+    const timer = setTimeout(() => { void flushEditDraft(); }, 300);
+    return () => clearTimeout(timer);
+  }, [
+    editing,
+    editObservations,
+    editNextVisitDate,
+    editNextVisitTask,
+    editVisitDate,
+    editLatitude,
+    editLongitude,
+    editLocationName,
+    newPhotos,
+    deletedPhotoIds,
+    editRecs,
+    flushEditDraft,
+  ]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "inactive" || state === "background") void flushEditDraft();
+    });
+    return () => subscription.remove();
+  }, [flushEditDraft]);
+
+  useEffect(() => () => { void flushEditDraft(); }, [flushEditDraft]);
 
   const loadData = useCallback(async () => {
     if (!id) return;
@@ -271,7 +338,50 @@ export default function VisitDetailScreen() {
   useFocusEffect(
     useCallback(() => {
       loadData();
-    }, [loadData])
+      if (!id || editDraftRestoredRef.current === id) return;
+      editDraftRestoredRef.current = id;
+      let active = true;
+      let restorationFinished = false;
+      (async () => {
+        const draft = await loadVisitEditDraft(id);
+        if (!active) return;
+        restorationFinished = true;
+        if (!draft || draft.visitId !== id) return;
+        const restored: VisitEditDraftPayload = {
+          visitId: id,
+          observations: draft.observations || "",
+          nextVisitDate: draft.nextVisitDate || "",
+          nextVisitTask: draft.nextVisitTask || "",
+          visitDate: draft.visitDate || "",
+          latitude: typeof draft.latitude === "number" ? draft.latitude : null,
+          longitude: typeof draft.longitude === "number" ? draft.longitude : null,
+          locationName: draft.locationName || "",
+          newPhotos: Array.isArray(draft.newPhotos) ? draft.newPhotos : [],
+          deletedPhotoIds: Array.isArray(draft.deletedPhotoIds) ? draft.deletedPhotoIds : [],
+          recommendations: Array.isArray(draft.recommendations) ? draft.recommendations : [],
+        };
+        suppressEditDraftSaveRef.current = false;
+        editDraftSnapshotRef.current = restored;
+        setEditObservations(restored.observations);
+        setEditNextVisitDate(restored.nextVisitDate);
+        setEditNextVisitTask(restored.nextVisitTask);
+        setEditVisitDate(restored.visitDate);
+        setEditLatitude(restored.latitude);
+        setEditLongitude(restored.longitude);
+        setEditLocationName(restored.locationName);
+        setNewPhotos(restored.newPhotos);
+        setDeletedPhotoIds(restored.deletedPhotoIds);
+        setEditRecs(restored.recommendations as Recommendation[]);
+        editDraftActiveRef.current = true;
+        setEditing(true);
+      })();
+      return () => {
+        active = false;
+        if (!restorationFinished && editDraftRestoredRef.current === id) {
+          editDraftRestoredRef.current = null;
+        }
+      };
+    }, [id, loadData])
   );
 
   const onRefresh = useCallback(async () => {
@@ -283,13 +393,29 @@ export default function VisitDetailScreen() {
 
   const startEditing = () => {
     if (!visitData) return;
-    setEditObservations(visitData.observations || "");
-    setEditNextVisitDate(visitData.nextVisitDate ? visitData.nextVisitDate.split("T")[0] : "");
-    setEditNextVisitTask(visitData.nextVisitTask || "");
-    setEditVisitDate(visitData.visitDate ? visitData.visitDate.split("T")[0] : "");
-    setEditLatitude(visitData.latitude || null);
-    setEditLongitude(visitData.longitude || null);
-    setEditLocationName(visitData.locationName || "");
+    const initialDraft: VisitEditDraftPayload = {
+      visitId: id,
+      observations: visitData.observations || "",
+      nextVisitDate: visitData.nextVisitDate ? visitData.nextVisitDate.split("T")[0] : "",
+      nextVisitTask: visitData.nextVisitTask || "",
+      visitDate: visitData.visitDate ? visitData.visitDate.split("T")[0] : "",
+      latitude: typeof visitData.latitude === "number" ? visitData.latitude : null,
+      longitude: typeof visitData.longitude === "number" ? visitData.longitude : null,
+      locationName: visitData.locationName || "",
+      newPhotos: [],
+      deletedPhotoIds: [],
+      recommendations: [...recommendations],
+    };
+    suppressEditDraftSaveRef.current = false;
+    editDraftSnapshotRef.current = initialDraft;
+    editDraftActiveRef.current = true;
+    setEditObservations(initialDraft.observations);
+    setEditNextVisitDate(initialDraft.nextVisitDate);
+    setEditNextVisitTask(initialDraft.nextVisitTask);
+    setEditVisitDate(initialDraft.visitDate);
+    setEditLatitude(initialDraft.latitude);
+    setEditLongitude(initialDraft.longitude);
+    setEditLocationName(initialDraft.locationName);
     setNewPhotos([]);
     setDeletedPhotoIds([]);
     setEditRecs([...recommendations]);
@@ -301,8 +427,12 @@ export default function VisitDetailScreen() {
   };
 
   const cancelEditing = () => {
+    suppressEditDraftSaveRef.current = true;
+    editDraftActiveRef.current = false;
     setEditing(false);
+    setNewPhotos([]);
     setDeletedPhotoIds([]);
+    if (id) void clearVisitEditDraft(id, newPhotos);
   };
 
   const captureGPS = async () => {
@@ -334,12 +464,12 @@ export default function VisitDetailScreen() {
         allowsEditing: false,
       });
       if (!result.canceled && result.assets.length > 0) {
-        const newPicks = result.assets.map((asset) => ({
+        const newPicks = await Promise.all(result.assets.map((asset) => stageDraftPhoto({
           uri: asset.uri,
           name: asset.fileName || undefined,
           type: asset.mimeType || undefined,
           size: asset.fileSize || undefined,
-        }));
+        })));
         setNewPhotos((prev) => [...prev, ...newPicks]);
       }
     } catch {
@@ -361,14 +491,21 @@ export default function VisitDetailScreen() {
       });
       if (!result.canceled && result.assets[0]) {
         const asset = result.assets[0];
-        setNewPhotos((prev) => [...prev, { uri: asset.uri, name: asset.fileName || undefined, type: asset.mimeType || undefined, size: asset.fileSize || undefined }]);
+        const staged = await stageDraftPhoto({ uri: asset.uri, name: asset.fileName || undefined, type: asset.mimeType || undefined, size: asset.fileSize || undefined });
+        setNewPhotos((prev) => [...prev, staged]);
       }
     } catch {
       Alert.alert("Error", "Could not open camera");
     }
   };
 
-  const removeNewPhoto = (idx: number) => setNewPhotos(newPhotos.filter((_, i) => i !== idx));
+  const removeNewPhoto = (idx: number) => {
+    setNewPhotos((current) => {
+      const removed = current[idx];
+      if (removed) void removeDraftPhoto(removed);
+      return current.filter((_, i) => i !== idx);
+    });
+  };
 
   const markPhotoDeleted = (photoId: string) => {
     setDeletedPhotoIds((prev) => [...prev, photoId]);
@@ -523,6 +660,13 @@ export default function VisitDetailScreen() {
         }
       }
 
+      suppressEditDraftSaveRef.current = true;
+      editDraftActiveRef.current = false;
+      try {
+        await clearVisitEditDraft(id, newPhotos);
+      } catch (error) {
+        console.warn("[VisitDetail] Could not clear completed edit draft:", error);
+      }
       setNewPhotos([]);
       setDeletedPhotoIds([]);
       setEditing(false);

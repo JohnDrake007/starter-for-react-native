@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Alert, Image, Platform } from "react-native";
+import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Alert, Image, Platform, AppState } from "react-native";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
@@ -10,6 +10,14 @@ import { CUSTOMERS_COLLECTION_ID, VISITS_COLLECTION_ID, INVENTORY_ITEMS_COLLECTI
 import { getCollection, createDocument, enqueuePhotoUpload } from "@/lib/sync-manager";
 import { normalizeCategory } from "@/lib/inventory-utils";
 import { rememberProduct, seedProductNamesFromInventory } from "@/lib/product-name-cache";
+import {
+  clearNewVisitDraft,
+  loadNewVisitDraft,
+  removeDraftPhoto,
+  saveNewVisitDraft,
+  stageDraftPhoto,
+  type NewVisitDraftPayload,
+} from "@/lib/visit-drafts";
 
 // ── Prescription Data Types ───────────────────────────────────────────────────
 
@@ -141,9 +149,122 @@ export default function NewVisitScreen() {
 
   const visitDatePickerHandled = useRef(false);
   const nextVisitDatePickerHandled = useRef(false);
+  const [draftReady, setDraftReady] = useState(false);
+  const draftReadyRef = useRef(false);
+  const suppressDraftSaveRef = useRef(false);
+  const draftSnapshotRef = useRef<NewVisitDraftPayload | null>(null);
+
+  draftSnapshotRef.current = {
+    currentStep,
+    selectedCustomerId,
+    selectedCustomerName,
+    customerSearch,
+    visitDate,
+    observations,
+    latitude,
+    longitude,
+    locationName,
+    photos,
+    sections,
+    nextVisitDate,
+    nextVisitTask,
+  };
+
+  const flushDraft = useCallback(async () => {
+    if (!draftReadyRef.current || suppressDraftSaveRef.current || !draftSnapshotRef.current) return;
+    try {
+      await saveNewVisitDraft(draftSnapshotRef.current);
+    } catch (error) {
+      console.warn("[NewVisit] Could not save draft:", error);
+    }
+  }, []);
+
+  // Restore unfinished work before enabling autosave. Without this guard, the
+  // initial blank render could overwrite a real draft while AsyncStorage loads.
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const draft = await loadNewVisitDraft();
+      if (!active) return;
+      if (draft) {
+        const restored: NewVisitDraftPayload = {
+          currentStep: Math.min(4, Math.max(1, Number(draft.currentStep) || 1)),
+          selectedCustomerId: draft.selectedCustomerId || "",
+          selectedCustomerName: draft.selectedCustomerName || "",
+          customerSearch: draft.customerSearch || "",
+          visitDate: draft.visitDate || new Date().toISOString().split("T")[0],
+          observations: draft.observations || "",
+          latitude: typeof draft.latitude === "number" ? draft.latitude : null,
+          longitude: typeof draft.longitude === "number" ? draft.longitude : null,
+          locationName: draft.locationName || "",
+          photos: Array.isArray(draft.photos) ? draft.photos : [],
+          sections: Array.isArray(draft.sections) && draft.sections.length > 0
+            ? draft.sections
+            : [emptySection("SPRAYING")],
+          nextVisitDate: draft.nextVisitDate || "",
+          nextVisitTask: draft.nextVisitTask || "",
+        };
+        // Make an immediate background/unmount flush safe even before React
+        // finishes rendering the restored state.
+        draftSnapshotRef.current = restored;
+        setCurrentStep(restored.currentStep);
+        setSelectedCustomerId(restored.selectedCustomerId);
+        setSelectedCustomerName(restored.selectedCustomerName);
+        setCustomerSearch(restored.customerSearch);
+        setVisitDate(restored.visitDate);
+        setObservations(restored.observations);
+        setLatitude(restored.latitude);
+        setLongitude(restored.longitude);
+        setLocationName(restored.locationName);
+        setPhotos(restored.photos);
+        setSections(restored.sections as PrescriptionSection[]);
+        setNextVisitDate(restored.nextVisitDate);
+        setNextVisitTask(restored.nextVisitTask);
+      }
+      draftReadyRef.current = true;
+      setDraftReady(true);
+    })();
+    return () => { active = false; };
+  }, []);
+
+  // Debounce normal typing, but flush immediately when the app backgrounds or
+  // this route unmounts (calls, screen lock, OS memory pressure, navigation).
+  useEffect(() => {
+    if (!draftReady || suppressDraftSaveRef.current) return;
+    const timer = setTimeout(() => { void flushDraft(); }, 300);
+    return () => clearTimeout(timer);
+  }, [
+    draftReady,
+    currentStep,
+    selectedCustomerId,
+    selectedCustomerName,
+    customerSearch,
+    visitDate,
+    observations,
+    latitude,
+    longitude,
+    locationName,
+    photos,
+    sections,
+    nextVisitDate,
+    nextVisitTask,
+    flushDraft,
+  ]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "inactive" || state === "background") void flushDraft();
+    });
+    return () => subscription.remove();
+  }, [flushDraft]);
+
+  useEffect(() => () => { void flushDraft(); }, [flushDraft]);
 
   useFocusEffect(
     useCallback(() => {
+      // A successfully submitted visit suppresses draft writes while this
+      // route leaves the screen. Re-enable autosave when starting the next one.
+      suppressDraftSaveRef.current = false;
       try {
         // Fall back to the contact person's mobile when a customer has no phone
         const cs = getCollection(CUSTOMERS_COLLECTION_ID).map((c: any) => ({ ...c, phone: c.phone || c.mobile || "" }));
@@ -196,7 +317,15 @@ export default function NewVisitScreen() {
   const pickImage = async () => {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.7, allowsMultipleSelection: true, allowsEditing: false });
-      if (!result.canceled) setPhotos((prev) => [...prev, ...result.assets.map((a) => ({ uri: a.uri, name: a.fileName || undefined, type: a.mimeType || undefined, size: a.fileSize || undefined }))]);
+      if (!result.canceled) {
+        const staged = await Promise.all(result.assets.map((asset) => stageDraftPhoto({
+          uri: asset.uri,
+          name: asset.fileName || undefined,
+          type: asset.mimeType || undefined,
+          size: asset.fileSize || undefined,
+        })));
+        setPhotos((prev) => [...prev, ...staged]);
+      }
     } catch { Alert.alert("Error", "Could not open gallery"); }
   };
 
@@ -207,12 +336,19 @@ export default function NewVisitScreen() {
       const result = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.7, allowsEditing: false });
       if (!result.canceled && result.assets[0]) {
         const a = result.assets[0];
-        setPhotos((prev) => [...prev, { uri: a.uri, name: a.fileName || undefined, type: a.mimeType || undefined, size: a.fileSize || undefined }]);
+        const staged = await stageDraftPhoto({ uri: a.uri, name: a.fileName || undefined, type: a.mimeType || undefined, size: a.fileSize || undefined });
+        setPhotos((prev) => [...prev, staged]);
       }
     } catch { Alert.alert("Error", "Could not open camera"); }
   };
 
-  const removePhoto = (idx: number) => setPhotos(photos.filter((_, i) => i !== idx));
+  const removePhoto = (idx: number) => {
+    setPhotos((current) => {
+      const removed = current[idx];
+      if (removed) void removeDraftPhoto(removed);
+      return current.filter((_, i) => i !== idx);
+    });
+  };
 
   // ── Section / Product helpers ───────────────────────────────────────────────
   const addSection = () => setSections((prev) => [...prev, emptySection("")]);
@@ -288,6 +424,15 @@ export default function NewVisitScreen() {
           childSaveFailures++;
           console.warn("Failed to upload photo:", e);
         }
+      }
+
+      // The parent visit now exists locally/server-side, so restoring this
+      // draft again could create a duplicate visit. Stop autosave before clear.
+      suppressDraftSaveRef.current = true;
+      try {
+        await clearNewVisitDraft(photos);
+      } catch (error) {
+        console.warn("[NewVisit] Could not clear completed draft:", error);
       }
 
       const savedMessage = childSaveFailures > 0
